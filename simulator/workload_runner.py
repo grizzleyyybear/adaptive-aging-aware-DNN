@@ -24,12 +24,21 @@ WORKLOAD_SPECS = {
         {'type': 'conv2d', 'K': 48,  'C': 48,  'R': 3, 'S': 3,  'P': 190, 'Q': 190}, 
         {'type': 'conv2d', 'K': 24,  'C': 48,  'R': 1, 'S': 1,  'P': 190, 'Q': 190},
     ],
-    'ViT-B-16': [
+    'ViT-B/16': [
         {'type': 'conv2d', 'K': 768, 'C': 3,   'R': 16, 'S': 16, 'P': 14, 'Q': 14}, # patch embed
         {'type': 'matmul', 'M': 197, 'K': 768, 'N': 768},   # attention 
         {'type': 'matmul', 'M': 197, 'K': 768, 'N': 3072},  # MLP
         {'type': 'matmul', 'M': 197, 'K': 3072, 'N': 768},
     ]
+}
+
+WORKLOAD_ALIASES = {
+    'ResNet50': 'ResNet-50',
+    'MobileNetV2': 'MobileNetV2',
+    'EfficientNetB4': 'EfficientNet-B4',
+    'BERTBase': 'BERT-Base',
+    'ViTB16': 'ViT-B/16',
+    'ViT-B-16': 'ViT-B/16',
 }
 
 class WorkloadRunner:
@@ -39,6 +48,11 @@ class WorkloadRunner:
     def __init__(self, cfg=None):
         self.cfg = cfg
         self.available_workloads = list(WORKLOAD_SPECS.keys())
+
+    def normalize_workload_name(self, workload_name: str) -> str:
+        if workload_name in WORKLOAD_SPECS:
+            return workload_name
+        return WORKLOAD_ALIASES.get(workload_name, workload_name)
         
     def generate_stream(self, pattern: str, workload_names: List[str], total_steps: int, seed: int) -> List[str]:
         """
@@ -73,6 +87,7 @@ class WorkloadRunner:
         """
         Fetches layer parameters for the specified workload.
         """
-        if workload_name in WORKLOAD_SPECS:
-            return WORKLOAD_SPECS[workload_name]
+        canonical_name = self.normalize_workload_name(workload_name)
+        if canonical_name in WORKLOAD_SPECS:
+            return WORKLOAD_SPECS[canonical_name]
         return WORKLOAD_SPECS['ResNet-50'] # default fallback

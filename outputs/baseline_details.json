@@ -1,0 +1,337 @@
+{
+  "Static": {
+    "name": "Static",
+    "ttf_years": 0.3170979195423254,
+    "peak_aging": 0.4550328205649232,
+    "latency_cycles": 63854880.8,
+    "energy_pj": 1999242268.928,
+    "per_workload": {
+      "ResNet-50": {
+        "peak_aging": 0.4550328205649232,
+        "latency_cycles": 16206848.0,
+        "energy_pj": 958520398.0799999,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "BERT-Base": {
+        "peak_aging": 0.4550328205649232,
+        "latency_cycles": 169869312.0,
+        "energy_pj": 3519880888.32,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          0,
+          0
+        ]
+      },
+      "MobileNetV2": {
+        "peak_aging": 0.4550328205649232,
+        "latency_cycles": 8304128.0,
+        "energy_pj": 558793473.28,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          0,
+          0
+        ]
+      },
+      "EfficientNet-B4": {
+        "peak_aging": 0.4550328205649232,
+        "latency_cycles": 52308900.0,
+        "energy_pj": 2452167384.0,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          0,
+          0
+        ]
+      },
+      "ViT-B/16": {
+        "peak_aging": 0.4550328205649232,
+        "latency_cycles": 72585216.0,
+        "energy_pj": 2506849200.96,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  },
+  "Random": {
+    "name": "Random",
+    "ttf_years": 0.3170979195423254,
+    "peak_aging": 0.2399954427754231,
+    "latency_cycles": 33186884.0,
+    "energy_pj": 2002018822.752,
+    "per_workload": {
+      "ResNet-50": {
+        "peak_aging": 0.20582418292260318,
+        "latency_cycles": 7376272.0,
+        "energy_pj": 960463463.04,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          1,
+          12,
+          10,
+          7,
+          6
+        ]
+      },
+      "BERT-Base": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 75497672.0,
+        "energy_pj": 3523687219.2,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          13,
+          1,
+          11
+        ]
+      },
+      "MobileNetV2": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 7225544.0,
+        "energy_pj": 559735424.64,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          3,
+          1,
+          8
+        ]
+      },
+      "EfficientNet-B4": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 46785800.0,
+        "energy_pj": 2455993684.8,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          15,
+          11,
+          12
+        ]
+      },
+      "ViT-B/16": {
+        "peak_aging": 0.22572379168776605,
+        "latency_cycles": 29049132.0,
+        "energy_pj": 2510214322.08,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          11,
+          12,
+          8,
+          2
+        ]
+      }
+    }
+  },
+  "Round-Robin": {
+    "name": "Round-Robin",
+    "ttf_years": 0.3170979195423254,
+    "peak_aging": 0.2399954427754231,
+    "latency_cycles": 33186884.0,
+    "energy_pj": 2002018822.752,
+    "per_workload": {
+      "ResNet-50": {
+        "peak_aging": 0.20582418292260318,
+        "latency_cycles": 7376272.0,
+        "energy_pj": 960463463.04,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "BERT-Base": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 75497672.0,
+        "energy_pj": 3523687219.2,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          1,
+          2
+        ]
+      },
+      "MobileNetV2": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 7225544.0,
+        "energy_pj": 559735424.64,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          1,
+          2
+        ]
+      },
+      "EfficientNet-B4": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 46785800.0,
+        "energy_pj": 2455993684.8,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          1,
+          2
+        ]
+      },
+      "ViT-B/16": {
+        "peak_aging": 0.22572379168776605,
+        "latency_cycles": 29049132.0,
+        "energy_pj": 2510214322.08,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    }
+  },
+  "Thermal-Balancing": {
+    "name": "Thermal-Balancing",
+    "ttf_years": 0.3170979195423254,
+    "peak_aging": 0.2399954427754231,
+    "latency_cycles": 33186884.0,
+    "energy_pj": 2002018822.752,
+    "per_workload": {
+      "ResNet-50": {
+        "peak_aging": 0.20582418292260318,
+        "latency_cycles": 7376272.0,
+        "energy_pj": 960463463.04,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "BERT-Base": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 75497672.0,
+        "energy_pj": 3523687219.2,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          1,
+          2
+        ]
+      },
+      "MobileNetV2": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 7225544.0,
+        "energy_pj": 559735424.64,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          1,
+          2
+        ]
+      },
+      "EfficientNet-B4": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 46785800.0,
+        "energy_pj": 2455993684.8,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          1,
+          2
+        ]
+      },
+      "ViT-B/16": {
+        "peak_aging": 0.22572379168776605,
+        "latency_cycles": 29049132.0,
+        "energy_pj": 2510214322.08,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    }
+  },
+  "SA": {
+    "name": "SA",
+    "ttf_years": 0.3170979195423254,
+    "peak_aging": 0.2399954427754231,
+    "latency_cycles": 33186884.0,
+    "energy_pj": 2002018822.752,
+    "per_workload": {
+      "ResNet-50": {
+        "peak_aging": 0.20582418292260318,
+        "latency_cycles": 7376272.0,
+        "energy_pj": 960463463.04,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          1,
+          12,
+          10,
+          7,
+          6
+        ]
+      },
+      "BERT-Base": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 75497672.0,
+        "energy_pj": 3523687219.2,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          7,
+          10,
+          0
+        ]
+      },
+      "MobileNetV2": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 7225544.0,
+        "energy_pj": 559735424.64,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          2,
+          9,
+          11
+        ]
+      },
+      "EfficientNet-B4": {
+        "peak_aging": 0.25614307975558204,
+        "latency_cycles": 46785800.0,
+        "energy_pj": 2455993684.8,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          9,
+          7,
+          12
+        ]
+      },
+      "ViT-B/16": {
+        "peak_aging": 0.22572379168776605,
+        "latency_cycles": 29049132.0,
+        "energy_pj": 2510214322.08,
+        "ttf_years": 0.3170979195423254,
+        "mapping": [
+          9,
+          7,
+          8,
+          12
+        ]
+      }
+    }
+  }
+}

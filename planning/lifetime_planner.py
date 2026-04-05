@@ -1,6 +1,11 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
 import numpy as np
-from typing import List, Dict, Any
 from omegaconf import DictConfig
+
+from utils.runtime_eval import MAX_TTF_TIME_S, compute_physics_ttf, compute_predictor_ttf
 
 class LifetimePlanner:
     """
@@ -12,6 +17,25 @@ class LifetimePlanner:
         
         self.num_nodes = self.graph.get_num_nodes()
         self.failure_threshold = self.config.get('failure_threshold', 0.8) # Normalize score representing failure
+        self.predictor = None
+        self.simulator = None
+        self.feature_builder = None
+        self.aging_generator = None
+        self.device = None
+
+    def attach_runtime(
+        self,
+        predictor: Any = None,
+        simulator: Any = None,
+        feature_builder: Any = None,
+        aging_generator: Any = None,
+        device: Any = None,
+    ) -> None:
+        self.predictor = predictor
+        self.simulator = simulator
+        self.feature_builder = feature_builder
+        self.aging_generator = aging_generator
+        self.device = device
         
     def allocate_budgets(self, target_lifetime_years: float, strategy: str = 'equalized') -> Dict[int, float]:
         """
@@ -90,6 +114,28 @@ class LifetimePlanner:
         reward = -float(variance) - (lambda_val * float(peak))
         return reward
 
+    def estimate_lifetime_extension(self, current_aging_vector: np.ndarray, predicted_trajectories: np.ndarray | None = None) -> float:
+        """
+        Estimate remaining lifetime margin in a normalized 0..1 scale.
+        """
+        current_peak = float(np.max(current_aging_vector)) if len(current_aging_vector) else 0.0
+        if predicted_trajectories is None or np.size(predicted_trajectories) == 0:
+            return float(np.clip((self.failure_threshold - current_peak) / max(self.failure_threshold, 1e-6), 0.0, 1.0))
+
+        preds = np.asarray(predicted_trajectories)
+        if preds.ndim == 1:
+            peak_path = np.array([float(np.max(preds))], dtype=np.float32)
+        elif preds.shape[0] == self.num_nodes:
+            peak_path = preds.max(axis=0)
+        else:
+            peak_path = preds.max(axis=1)
+
+        crossings = np.where(peak_path >= self.failure_threshold)[0]
+        if len(crossings) == 0:
+            return 1.0
+        first_crossing = float(crossings[0] + 1)
+        return float(np.clip(first_crossing / max(len(peak_path), 1), 0.0, 1.0))
+
     def recommend_rebalance(self, predicted_trajectories: np.ndarray, current_mapping: np.ndarray) -> dict:
         """
         Analyzes predicted future bottlenecks and suggests greedy mapping corrections.
@@ -147,3 +193,42 @@ class LifetimePlanner:
         
         ttf = failure_threshold / rate
         return float(np.clip(ttf, 0.0, 10.0))
+
+    def estimate_failure_time(
+        self,
+        layers: List[dict],
+        mapping: np.ndarray,
+        workload_name: str,
+        failure_threshold: float | None = None,
+        max_time_s: float = MAX_TTF_TIME_S,
+    ) -> float:
+        """
+        Estimate TTF in years using the attached runtime components when available.
+        """
+        threshold = float(failure_threshold if failure_threshold is not None else self.failure_threshold)
+
+        if self.simulator is not None and self.predictor is not None and self.feature_builder is not None:
+            return compute_predictor_ttf(
+                simulator=self.simulator,
+                feature_builder=self.feature_builder,
+                graph=self.graph,
+                predictor=self.predictor,
+                layers=layers,
+                mapping=mapping,
+                workload_name=workload_name,
+                failure_threshold=threshold,
+                max_time_s=max_time_s,
+                device=self.device,
+            )
+
+        if self.simulator is not None and self.aging_generator is not None:
+            return compute_physics_ttf(
+                simulator=self.simulator,
+                aging_generator=self.aging_generator,
+                layers=layers,
+                mapping=mapping,
+                failure_threshold=threshold,
+                max_time_s=max_time_s,
+            )
+
+        return self.compute_ttf(np.asarray(mapping, dtype=np.float32), threshold)

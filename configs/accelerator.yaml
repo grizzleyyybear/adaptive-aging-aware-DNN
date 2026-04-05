@@ -1,7 +1,49 @@
 accelerator:
-  pe_array: [64, 64]         # rows x cols
-  mac_clusters: 64
-  sram_banks: 16
-  noc_routers: 8
+  # Canonical topology used across the graph builder, simulator, and pipeline.
+  pe_array: [4, 4]
+  pe_array_rows: 4
+  pe_array_cols: 4
+  pe_rows: 4
+  pe_cols: 4
+  num_pes: 16
+  mac_clusters: 16
+  sram_banks: 8
+  noc_routers: 4
+  num_mac_clusters: 16
+  num_sram_banks: 8
+  num_noc_routers: 4
+  num_layers: 10
+
+  # Simulator throughput / memory parameters.
+  mac_per_pe: 1
+  ops_per_cycle: 1
+  sram_kb: 256.0
+  dram_bw_gb_s: 51.2
+  noc_bw_gb_s: 512.0
+  noc_bandwidth_gbps: 512.0
+  freq_mhz: 1000.0
   clock_frequency_ghz: 1.0
+  clock_ghz: 1.0
+  voltage_v: 0.8
   supply_voltage: 0.8
+
+  # Energy model aliases kept for backward compatibility.
+  mac_energy_pj: 0.25
+  mac_energy_pj_per_op: 0.25
+  sram_rd_energy_pj: 1.5
+  sram_read_energy_pj: 1.5
+  dram_rd_energy_pj: 70.0
+  noc_hop_energy_pj: 0.5
+
+  # Aging / leakage knobs.
+  aging_freq_degrade: 0.0
+  aging_leak_increase: 0.0
+
+  # NoC / mapping-aware parameters.
+  noc_latency_cycles: 100.0
+  noc_energy_per_byte_pj: 2.0
+  idle_leakage_pj_per_cycle: 0.005
+
+  # Legacy capacity-style keys referenced by older scripts/tests.
+  max_macs_per_cluster: 1
+  max_memory_per_bank: 32768

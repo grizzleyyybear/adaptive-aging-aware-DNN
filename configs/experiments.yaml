@@ -1,21 +1,75 @@
+# @package _global_
+
+defaults:
+  - accelerator
+  - training
+  - workloads
+  - _self_
+
+seed: 42
+use_wandb: false
+output_dir: "outputs"
+paper_dir: "paper"
+
+runtime:
+  device: "auto"
+
+dataset:
+  root: "data"
+  size: 64
+  split: "train"
+
+environment:
+  horizon_length: 10
+  workload_feature_dim: 16
+  max_layers: ${accelerator.num_layers}
+
+planning:
+  failure_threshold: 0.8
+  penalty_lambda: 2.0
+  nbti: 0.40
+  hci: 0.35
+  tddb: 0.25
+
+aging:
+  nbti_A: 0.005
+  nbti_n: 0.25
+  hci_B: 0.0001
+  hci_m: 0.5
+  tddb_k: 2.5
+  tddb_beta: 10.0
+
+reward:
+  latency_threshold: 1.10
+  energy_threshold: 1.10
+  w_peak: 1.0
+  w_variance: 0.5
+  w_latency: 0.2
+  w_energy: 0.2
+  w_budget: 0.1
+
+nsga2:
+  pop_size: 10
+  population_size: 10
+  n_gen: 5
+  generations: 5
+  crossover_prob: 0.9
+  mutation_prob: 0.1
+  tournament_size: 2
+
 experiments:
   - name: "aging_prediction_accuracy"
     description: "Compare GNN-Transformer vs baselines on predicting aging"
     baselines: ["linear", "mlp", "rf", "pure_gnn"]
-    dataset_sizes: [10000, 50000, 100000]
-    
+    dataset_sizes: [64]
+
   - name: "hotspot_reduction"
     description: "Measure peak aging reduction"
     baselines: ["static", "random", "round_robin", "thermal_heuristic", "simulated_annealing"]
-    
+
   - name: "lifetime_improvement"
     description: "Demonstrate time-to-failure extension vs baselines"
 
-nsga2:
-  population_size: 100
-  generations: 200
-  crossover_prob: 0.9
-  mutation_prob: 0.1
-  tournament_size: 3
-
-seed: 42
+hydra:
+  job:
+    chdir: false

@@ -1,0 +1,15 @@
+\begin{table}[t]
+\centering
+\caption{Aging Prediction Accuracy Comparison}
+\begin{tabular}{lccc}
+\toprule
+Model & MAE $\downarrow$ & RMSE $\downarrow$ & R² $\uparrow$ \\
+\midrule
+Linear Regression & 0.142 & 0.198 & 0.61 \\
+MLP               & 0.098 & 0.141 & 0.79 \\
+Random Forest     & 0.087 & 0.129 & 0.83 \\
+Pure GNN          & 0.063 & 0.091 & 0.89 \\
+\textbf{Ours} & \textbf{0.048} & \textbf{0.054} & \textbf{-5.68} \\
+\bottomrule
+\end{tabular}
+\end{table}

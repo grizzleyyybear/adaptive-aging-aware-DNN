@@ -1,0 +1,30 @@
+\begin{table}[h]
+\centering
+\caption{Comparison of Initial Mapping, NSGA-II, and PPO Across Workloads}
+\label{tab:method_comparison}
+\begin{tabular}{llcccr}
+\toprule
+Workload & Method & Peak Aging & Latency (cycles) & Energy (pJ) & TTF (yrs) \\
+\midrule
+ResNet-50 & Initial & 0.4353 & 16206848 & 9.585e+08 & 0.0811 \\
+ & NSGA-II & 0.2142 & 7376272 & 9.605e+08 & 0.7927 \\
+ & PPO & 0.2155 & 7376272 & 9.605e+08 & 0.7927 \\
+\midrule
+BERT-Base & Initial & 0.4727 & 169869312 & 3.520e+09 & 0.0811 \\
+ & NSGA-II & 0.2651 & 75497672 & 3.524e+09 & 0.2854 \\
+ & PPO & 0.2681 & 75497672 & 3.524e+09 & 0.2854 \\
+\midrule
+MobileNetV2 & Initial & 0.4585 & 8304128 & 5.588e+08 & 0.0811 \\
+ & NSGA-II & 0.2535 & 7225544 & 5.597e+08 & 0.2854 \\
+ & PPO & 0.2541 & 7225544 & 5.597e+08 & 0.2854 \\
+\midrule
+EfficientNet-B4 & Initial & 0.4696 & 52308900 & 2.452e+09 & 0.0811 \\
+ & NSGA-II & 0.2609 & 46785800 & 2.456e+09 & 0.2854 \\
+ & PPO & 0.2609 & 46785800 & 2.456e+09 & 0.2854 \\
+\midrule
+ViT-B/16 & Initial & 0.4748 & 72585216 & 2.507e+09 & 0.0811 \\
+ & NSGA-II & 0.1737 & 29049132 & 2.510e+09 & 0.5073 \\
+ & PPO & 0.2292 & 29049132 & 2.510e+09 & 0.5073 \\
+\bottomrule
+\end{tabular}
+\end{table}

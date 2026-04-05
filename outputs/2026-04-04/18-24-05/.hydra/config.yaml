@@ -1,0 +1,150 @@
+accelerator:
+  pe_array:
+  - 4
+  - 4
+  pe_array_rows: 4
+  pe_array_cols: 4
+  pe_rows: 4
+  pe_cols: 4
+  num_pes: 16
+  mac_clusters: 16
+  sram_banks: 8
+  noc_routers: 4
+  num_mac_clusters: 16
+  num_sram_banks: 8
+  num_noc_routers: 4
+  num_layers: 10
+  mac_per_pe: 1
+  ops_per_cycle: 1
+  sram_kb: 256.0
+  dram_bw_gb_s: 51.2
+  noc_bw_gb_s: 512.0
+  noc_bandwidth_gbps: 512.0
+  freq_mhz: 1000.0
+  clock_frequency_ghz: 1.0
+  clock_ghz: 1.0
+  voltage_v: 0.8
+  supply_voltage: 0.8
+  mac_energy_pj: 0.25
+  mac_energy_pj_per_op: 0.25
+  sram_rd_energy_pj: 1.5
+  sram_read_energy_pj: 1.5
+  dram_rd_energy_pj: 70.0
+  noc_hop_energy_pj: 0.5
+  aging_freq_degrade: 0.0
+  aging_leak_increase: 0.0
+  max_macs_per_cluster: 1
+  max_memory_per_bank: 32768
+model:
+  type: hybrid_gnn_transformer
+  hidden_dim: 256
+  gat_heads: 4
+  transformer_heads: 4
+  transformer_layers: 2
+  prediction_horizon: 10
+training:
+  epochs: 20
+  batch_size: 64
+  learning_rate: 0.0001
+  lr: 0.0001
+  weight_decay: 1.0e-05
+  scheduler: CosineAnnealingLR
+  loss: SequenceMSE
+  discount_factor: 0.95
+  patience: 15
+ppo:
+  learning_rate: 0.0003
+  total_timesteps: 320
+  clip_epsilon: 0.2
+  entropy_coeff: 0.01
+  value_loss_coeff: 0.5
+  n_steps: 64
+  batch_size: 64
+  epochs: 2
+  n_epochs: 2
+  gamma: 0.99
+  gae_lambda: 0.95
+workloads:
+- name: ResNet-50
+  type: CNN
+  base_activity: 0.85
+- name: MobileNetV2
+  type: CNN
+  base_activity: 0.65
+- name: EfficientNet-B4
+  type: CNN
+  base_activity: 0.7
+- name: BERT-Base
+  type: Transformer
+  base_activity: 0.9
+- name: ViT-B/16
+  type: Transformer
+  base_activity: 0.88
+scheduling:
+  patterns:
+  - static
+  - alternating
+  - burst
+  - mixed
+  default_pattern: mixed
+seed: 42
+use_wandb: false
+output_dir: outputs
+paper_dir: paper
+dataset:
+  root: data
+  size: 64
+  split: train
+environment:
+  horizon_length: 10
+  workload_feature_dim: 16
+  max_layers: ${accelerator.num_layers}
+planning:
+  failure_threshold: 0.8
+  penalty_lambda: 2.0
+  nbti: 0.4
+  hci: 0.35
+  tddb: 0.25
+aging:
+  nbti_A: 0.005
+  nbti_n: 0.25
+  hci_B: 0.0001
+  hci_m: 0.5
+  tddb_k: 2.5
+  tddb_beta: 10.0
+reward:
+  latency_threshold: 1.1
+  energy_threshold: 1.1
+  w_peak: 1.0
+  w_variance: 0.5
+  w_latency: 0.2
+  w_energy: 0.2
+  w_budget: 0.1
+nsga2:
+  pop_size: 10
+  population_size: 10
+  n_gen: 5
+  generations: 5
+  crossover_prob: 0.9
+  mutation_prob: 0.1
+  tournament_size: 2
+experiments:
+- name: aging_prediction_accuracy
+  description: Compare GNN-Transformer vs baselines on predicting aging
+  baselines:
+  - linear
+  - mlp
+  - rf
+  - pure_gnn
+  dataset_sizes:
+  - 64
+- name: hotspot_reduction
+  description: Measure peak aging reduction
+  baselines:
+  - static
+  - random
+  - round_robin
+  - thermal_heuristic
+  - simulated_annealing
+- name: lifetime_improvement
+  description: Demonstrate time-to-failure extension vs baselines

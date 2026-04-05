@@ -11,7 +11,7 @@ workloads:
   - name: "BERT-Base"
     type: "Transformer"
     base_activity: 0.90
-  - name: "ViT-B-16"
+  - name: "ViT-B/16"
     type: "Transformer"
     base_activity: 0.88
 

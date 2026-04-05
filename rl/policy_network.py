@@ -1,8 +1,8 @@
+from typing import Tuple
+
 import torch
 import torch.nn as nn
 from torch import Tensor
-import torch.nn.functional as F
-from typing import Tuple
 from torch.distributions import Categorical
 
 class ActorCritic(nn.Module):
@@ -41,7 +41,7 @@ class ActorCritic(nn.Module):
         val = self.critic_head(x)
         return logits, val
         
-    def get_action(self, obs: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+    def get_action(self, obs: Tensor, deterministic: bool = False) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Samples an action from the current policy distribution.
         
@@ -53,10 +53,16 @@ class ActorCritic(nn.Module):
         logits, val = self.forward(obs)
         
         dist = Categorical(logits=logits)
-        action = dist.sample()
+        if deterministic:
+            action = torch.argmax(logits, dim=-1)
+        else:
+            action = dist.sample()
         log_prob = dist.log_prob(action)
         
         return action, log_prob, val
+
+    def act_deterministic(self, obs: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+        return self.get_action(obs, deterministic=True)
         
     def evaluate_actions(self, obs: Tensor, actions: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """

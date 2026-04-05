@@ -9,6 +9,15 @@ from pathlib import Path
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from omegaconf import DictConfig
 
+from utils.device import (
+    configure_torch_runtime,
+    dataloader_kwargs,
+    describe_device,
+    get_device_request,
+    resolve_device,
+    use_non_blocking,
+)
+
 log = logging.getLogger(__name__)
 
 class TrainingPipeline:
@@ -19,31 +28,50 @@ class TrainingPipeline:
         self.config = config
         self.model = model
         self.dataset = dataset
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = resolve_device(get_device_request(self.config))
+        configure_torch_runtime(self.device)
+        self.non_blocking = use_non_blocking(self.device)
+        self.loader_kwargs = dataloader_kwargs(self.device)
         self.model.to(self.device)
+        log.info("TrainingPipeline using %s", describe_device(self.device))
         
         # Configure hyperparameters
         train_cfg = self.config.get('training', {})
         self.epochs = train_cfg.get('epochs', 100)
         self.batch_size = train_cfg.get('batch_size', 32)
-        self.lr = train_cfg.get('learning_rate', 1e-3)
+        self.lr = train_cfg.get('learning_rate', train_cfg.get('lr', 1e-3))
         self.patience = train_cfg.get('patience', 10)
+        self.weight_decay = train_cfg.get('weight_decay', 1e-4)
         
         # We need a proper Train/Val/Test split since the base dataset object doesn't do it automatically
         total_len = len(dataset)
-        train_len = int(0.8 * total_len)
-        val_len = int(0.1 * total_len)
-        test_len = total_len - train_len - val_len
+        if total_len == 0:
+            raise ValueError("TrainingPipeline requires a non-empty dataset")
+
+        if total_len == 1:
+            train_len, val_len, test_len = 1, 0, 0
+        elif total_len == 2:
+            train_len, val_len, test_len = 1, 0, 1
+        else:
+            train_len = max(int(0.8 * total_len), 1)
+            val_len = max(int(0.1 * total_len), 1)
+            test_len = total_len - train_len - val_len
+            if test_len <= 0:
+                test_len = 1
+                if train_len > val_len:
+                    train_len -= 1
+                else:
+                    val_len -= 1
         
         # For simplicity in Phase 2 unless specifically requested, we use random split
         generator = torch.Generator().manual_seed(42)
         train_set, val_set, test_set = torch.utils.data.random_split(dataset, [train_len, val_len, test_len], generator=generator)
         
-        self.train_loader = DataLoader(train_set, batch_size=self.batch_size, shuffle=True, num_workers=0)
-        self.val_loader = DataLoader(val_set, batch_size=self.batch_size, shuffle=False, num_workers=0)
-        self.test_loader = DataLoader(test_set, batch_size=self.batch_size, shuffle=False, num_workers=0)
+        self.train_loader = DataLoader(train_set, batch_size=self.batch_size, shuffle=True, **self.loader_kwargs)
+        self.val_loader = DataLoader(val_set, batch_size=self.batch_size, shuffle=False, **self.loader_kwargs)
+        self.test_loader = DataLoader(test_set, batch_size=self.batch_size, shuffle=False, **self.loader_kwargs)
         
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.epochs)
         
         # Handle loss based on model type (single step vs trajectory)
@@ -71,7 +99,7 @@ class TrainingPipeline:
             train_loss = 0.0
             
             for batch in self.train_loader:
-                batch = batch.to(self.device)
+                batch = batch.to(self.device, non_blocking=self.non_blocking)
                 self.optimizer.zero_grad()
                 
                 preds = self.model(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
@@ -85,7 +113,7 @@ class TrainingPipeline:
                 
                 train_loss += loss.item() * batch.num_graphs
                 
-            train_loss /= len(self.train_loader.dataset)
+            train_loss /= max(len(self.train_loader.dataset), 1)
             self.scheduler.step()
             
             # Validation Phase
@@ -135,7 +163,7 @@ class TrainingPipeline:
         
         with torch.no_grad():
             for batch in loader:
-                batch = batch.to(self.device)
+                batch = batch.to(self.device, non_blocking=self.non_blocking)
                 preds = self.model(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
                 target = batch.y_trajectory if self.is_trajectory else batch.y
                 
@@ -145,7 +173,15 @@ class TrainingPipeline:
                 all_preds.append(preds.cpu().numpy())
                 all_targets.append(target.cpu().numpy())
                 
-        avg_loss = total_loss / len(loader.dataset)
+        if len(loader.dataset) == 0 or not all_preds:
+            return {
+                'loss': 0.0,
+                'mae': 0.0,
+                'rmse': 0.0,
+                'r2': 0.0
+            }
+
+        avg_loss = total_loss / max(len(loader.dataset), 1)
         
         preds_np = np.concatenate(all_preds, axis=0)
         targets_np = np.concatenate(all_targets, axis=0)

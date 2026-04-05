@@ -1,0 +1,40 @@
+import torch
+import torch.nn as nn
+from models.hybrid_gnn_transformer import HybridGNNTransformer
+
+
+class TrajectoryPredictor(nn.Module):
+    """
+    Extends the base hybrid predictor to forecast a temporal horizon.
+    """
+    def __init__(
+        self,
+        gnn_encoder: HybridGNNTransformer,
+        hidden_dim: int = 256,
+        horizon: int = 10,
+        gamma: float = 0.95,
+    ):
+        super().__init__()
+        self.encoder = gnn_encoder
+        self.horizon = horizon
+        self.gamma = gamma
+        enc_dim = getattr(self.encoder, 'hidden_dim', hidden_dim)
+
+        # Deeper head with more capacity for 10-step prediction
+        self.traj_head = nn.Sequential(
+            nn.Linear(enc_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, horizon),
+            nn.Sigmoid(),  # bound to [0,1] like aging scores
+        )
+
+    def forward(self, x, edge_index, edge_attr=None, batch=None):
+        h = self.encoder.encode_graph(x, edge_index, edge_attr)
+        trajectory = self.traj_head(h)  # [N, horizon]
+        return trajectory

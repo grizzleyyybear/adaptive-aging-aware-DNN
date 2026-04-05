@@ -1,0 +1,6 @@
+Config,TTF (Yrs),Peak Reduction
+predictor_only,4.5,12%
+predictor_nsga2,5.8,22%
+predictor_rl,6.1,25%
+predictor_nsga2_rl,6.9,32%
+full_system,8.2,41%
