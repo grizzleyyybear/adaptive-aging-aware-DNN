@@ -64,7 +64,7 @@ def dataloader_kwargs(device: torch.device) -> dict:
     """Pick sensible DataLoader settings for the active device."""
     use_cuda = device.type == "cuda"
     cpu_count = os.cpu_count() or 1
-    num_workers = min(4, cpu_count) if use_cuda else 0
+    num_workers = min(2, cpu_count) if use_cuda else 0
 
     kwargs = {
         "num_workers": num_workers,
