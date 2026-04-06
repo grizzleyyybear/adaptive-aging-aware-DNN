@@ -33,26 +33,36 @@ from omegaconf import OmegaConf
 FULL_MODE = "--full" in sys.argv
 
 if FULL_MODE:
-    DATASET_SIZE  = 40000
-    TRAIN_EPOCHS  = 20
-    NSGA_POP      = 20
-    NSGA_GEN      = 20
-    PPO_ITERS     = 40
-    PPO_STEPS     = 64
-    DEVICE        = "auto"
+    DATASET_SIZE       = 40000
+    PRED_EPOCHS        = 100    # paper: converged at epoch 78
+    PRED_PATIENCE      = 15
+    TRAJ_EPOCHS        = 120    # paper: converged at epoch 82; give extra headroom
+    TRAJ_PATIENCE      = 20     # trajectory needs more patience (harder task)
+    NSGA_POP           = 20
+    NSGA_GEN           = 20
+    PPO_ITERS          = 40
+    PPO_STEPS          = 64
+    DEVICE             = "auto"
 else:
-    DATASET_SIZE  = 200
-    TRAIN_EPOCHS  = 10
-    NSGA_POP      = 12
-    NSGA_GEN      = 12
-    PPO_ITERS     = 15
-    PPO_STEPS     = 32
-    DEVICE        = "cpu"
+    DATASET_SIZE       = 200
+    PRED_EPOCHS        = 15
+    PRED_PATIENCE      = 8
+    TRAJ_EPOCHS        = 20
+    TRAJ_PATIENCE      = 10
+    NSGA_POP           = 12
+    NSGA_GEN           = 12
+    PPO_ITERS          = 15
+    PPO_STEPS          = 32
+    DEVICE             = "cpu"
+
+TRAIN_EPOCHS = PRED_EPOCHS  # kept for backward compat display
 
 SEP = "=" * 68
 
 
-def build_config():
+def build_config(epochs=None, patience=None):
+    ep = epochs if epochs is not None else PRED_EPOCHS
+    pt = patience if patience is not None else PRED_PATIENCE
     return OmegaConf.create({
         "seed": 42,
         "accelerator": {
@@ -70,9 +80,9 @@ def build_config():
             "prediction_horizon": 10,
         },
         "training": {
-            "epochs": TRAIN_EPOCHS, "batch_size": 64,
+            "epochs": ep, "batch_size": 64,
             "learning_rate": 1e-4, "weight_decay": 1e-5,
-            "patience": 8,
+            "patience": pt,
         },
         "aging": {
             "nbti_A": 0.005, "nbti_n": 0.25,
@@ -94,7 +104,9 @@ def main():
     print(f"  PIPELINE EVALUATION [{mode_label}]  —  device={DEVICE}")
     print(SEP)
 
-    cfg = build_config()
+    pred_cfg = build_config(epochs=PRED_EPOCHS, patience=PRED_PATIENCE)
+    traj_cfg = build_config(epochs=TRAJ_EPOCHS, patience=TRAJ_PATIENCE)
+    cfg = pred_cfg  # shared config for non-training parts
     torch.manual_seed(42)
     np.random.seed(42)
     accel_cfg = cfg.accelerator
@@ -142,7 +154,7 @@ def main():
     horizon  = cfg.model.prediction_horizon
 
     # ── 3. Predictor ──────────────────────────────────────────────────
-    print(f"\n[3/6] Training predictor ({TRAIN_EPOCHS} epochs)...", flush=True)
+    print(f"\n[3/6] Training predictor (up to {PRED_EPOCHS} epochs, patience={PRED_PATIENCE})...", flush=True)
     predictor = HybridGNNTransformer(
         node_feature_dim=feat_dim,
         hidden_dim=cfg.model.hidden_dim,
@@ -151,19 +163,19 @@ def main():
         transformer_heads=cfg.model.transformer_heads,
         seq_len=horizon,
     )
-    pred_metrics = TrainingPipeline(cfg, predictor, dataset).train()
+    pred_metrics = TrainingPipeline(pred_cfg, predictor, dataset).train()
     print(f"  R² = {pred_metrics['r2']:.4f}  |  "
           f"MAE = {pred_metrics['mae']:.4f}  |  "
           f"RMSE = {pred_metrics['rmse']:.4f}", flush=True)
 
     # ── 4. Trajectory predictor ───────────────────────────────────────
-    print(f"\n[4/6] Training trajectory predictor ({TRAIN_EPOCHS} epochs)...", flush=True)
+    print(f"\n[4/6] Training trajectory predictor (up to {TRAJ_EPOCHS} epochs, patience={TRAJ_PATIENCE})...", flush=True)
     traj_pred = TrajectoryPredictor(
         gnn_encoder=predictor,
         hidden_dim=cfg.model.hidden_dim,
         horizon=horizon, gamma=0.95,
     )
-    traj_metrics = TrainingPipeline(cfg, traj_pred, dataset).train()
+    traj_metrics = TrainingPipeline(traj_cfg, traj_pred, dataset).train()
     print(f"  R² = {traj_metrics['r2']:.4f}  |  "
           f"MAE = {traj_metrics['mae']:.4f}  |  "
           f"RMSE = {traj_metrics['rmse']:.4f}", flush=True)

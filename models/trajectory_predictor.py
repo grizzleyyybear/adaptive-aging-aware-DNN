@@ -48,7 +48,7 @@ class TrajectoryPredictor(nn.Module):
         h_aug = torch.cat([h, current_pred], dim=1)  # [N, enc_dim + 1]
         return self.traj_head(h_aug)  # [N, horizon]
 
-    def trajectory_loss(self, pred, target, var_weight: float = 0.1):
+    def trajectory_loss(self, pred, target, var_weight: float = 0.02):
         horizon = pred.shape[1]
         weights = torch.tensor(
             [self.gamma ** j for j in range(horizon)],

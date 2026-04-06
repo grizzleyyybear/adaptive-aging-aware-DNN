@@ -83,7 +83,8 @@ class TrainingPipeline:
             self.is_trajectory = False
             
     def train(self) -> dict:
-        best_val_loss = float('inf')
+        # For trajectory: monitor R² (higher=better). For predictor: monitor loss (lower=better).
+        best_val_loss = float('-inf') if self.is_trajectory else float('inf')
         patience_counter = 0
         
         checkpoint_dir = Path("checkpoints")
@@ -132,9 +133,17 @@ class TrainingPipeline:
                 except Exception as e:
                     log.warning(f"W&B logging failed: {e}")
                 
-            # Early Stopping and model saving
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+        # Early Stopping and model saving — monitor R² for trajectory, loss for predictor
+            monitor_r2 = self.is_trajectory
+            if monitor_r2:
+                metric_val = val_metrics['r2']
+                improved = metric_val > best_val_loss  # best_val_loss reused as best_r2
+            else:
+                metric_val = val_loss
+                improved = metric_val < best_val_loss
+
+            if improved:
+                best_val_loss = metric_val
                 patience_counter = 0
                 torch.save(self.model.state_dict(), best_path)
             else:
