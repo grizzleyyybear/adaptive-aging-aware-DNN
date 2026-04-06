@@ -1,6 +1,6 @@
 # Repository Graph — Adaptive Aging-Aware DNN Accelerator
 
-> **Generated:** 2026-04-05 | **Purpose:** Codebase reference map for audits & onboarding
+> **Generated:** 2025-04-05 | **Last updated:** 2025-06-13 | **Purpose:** Codebase reference map for audits & onboarding
 
 ---
 
@@ -114,7 +114,7 @@ evaluation (standalone: numpy, scipy, pandas) ───┘
 |------|------------|-------------|
 | `hybrid_gnn_transformer.py` | `HybridGNNTransformer`, `PositionalEncoding` | GCN→GAT→Transformer encoder, sigmoid output [0,1] |
 | `trajectory_predictor.py` | `TrajectoryPredictor` | Multi-step future aging prediction with variance-aware loss |
-| `training_pipeline.py` | `TrainingPipeline` | Train/eval loop, early stopping, WandB logging, checkpointing |
+| `training_pipeline.py` | `TrainingPipeline` | Train/eval loop; early stopping monitors R² for trajectory / loss for predictor; optional `checkpoint_dir`; WandB logging |
 
 **Deps:** torch, torch_geometric (GATConv, GCNConv), sklearn, wandb, omegaconf
 
@@ -333,6 +333,9 @@ evaluation (standalone: numpy, scipy, pandas) ───┘
 | `generate_report.py` | Audit + test results → `DIAGNOSTIC_REPORT.md` |
 | `run_tests.py` | Pytest runner → `pytest_clean.log` |
 | `run_test_ds.py` | Dataset smoke test wrapper |
+| `run_eval.py` | **Primary eval script** — smoke (`--smoke`) + full (`--full`) modes; 6-stage pipeline: graph→dataset→predictor→trajectory→NSGA-II→PPO; accepts `--ckpt-dir` |
+| `paper_comparison.py` | Paper vs implementation comparison — ASCII report + matplotlib 3-panel figure (`paper_comparison.png`); loads `eval_results.json` |
+| `eval_results.json` | Latest evaluation results (Predictor R²=0.9982, Trajectory R²=0.7718, PPO best=+0.585) |
 
 ---
 

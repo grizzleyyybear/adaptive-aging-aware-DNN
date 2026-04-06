@@ -30,7 +30,12 @@ import torch
 from omegaconf import OmegaConf
 
 # ── Detect mode ──────────────────────────────────────────────────────
-FULL_MODE = "--full" in sys.argv
+FULL_MODE  = "--full"  in sys.argv
+SMOKE_MODE = "--smoke" in sys.argv
+
+# Optional: --ckpt-dir /path/to/dir
+_CKPT_IDX = next((i for i, a in enumerate(sys.argv) if a == "--ckpt-dir"), None)
+CKPT_DIR  = Path(sys.argv[_CKPT_IDX + 1]) if _CKPT_IDX is not None else (REPO_ROOT / "checkpoints")
 
 if FULL_MODE:
     DATASET_SIZE       = 40000
@@ -163,7 +168,7 @@ def main():
         transformer_heads=cfg.model.transformer_heads,
         seq_len=horizon,
     )
-    pred_metrics = TrainingPipeline(pred_cfg, predictor, dataset).train()
+    pred_metrics = TrainingPipeline(pred_cfg, predictor, dataset, checkpoint_dir=CKPT_DIR).train()
     print(f"  R² = {pred_metrics['r2']:.4f}  |  "
           f"MAE = {pred_metrics['mae']:.4f}  |  "
           f"RMSE = {pred_metrics['rmse']:.4f}", flush=True)
@@ -175,7 +180,7 @@ def main():
         hidden_dim=cfg.model.hidden_dim,
         horizon=horizon, gamma=0.95,
     )
-    traj_metrics = TrainingPipeline(traj_cfg, traj_pred, dataset).train()
+    traj_metrics = TrainingPipeline(traj_cfg, traj_pred, dataset, checkpoint_dir=CKPT_DIR).train()
     print(f"  R² = {traj_metrics['r2']:.4f}  |  "
           f"MAE = {traj_metrics['mae']:.4f}  |  "
           f"RMSE = {traj_metrics['rmse']:.4f}", flush=True)
@@ -218,7 +223,7 @@ def main():
             "converged_gen": len(opt.hv_history),
         }
         print(f"  {wl:20s}  {len(pareto):2d} sols  "
-              f"peak {init_peak:.4f}→{best:.4f}  ({red:+.1f}%)  "
+              f"peak {init_peak:.4f}->{best:.4f}  ({red:+.1f}%)  "
               f"cache={opt._cache.hits}h  conv@{len(opt.hv_history)}gen", flush=True)
 
     # ── 6. PPO ────────────────────────────────────────────────────────

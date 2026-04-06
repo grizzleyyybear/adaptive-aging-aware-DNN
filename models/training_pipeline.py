@@ -24,7 +24,7 @@ class TrainingPipeline:
     """
     Standardizes training loop for the GNN models.
     """
-    def __init__(self, config: DictConfig, model: nn.Module, dataset):
+    def __init__(self, config: DictConfig, model: nn.Module, dataset, checkpoint_dir=None):
         self.config = config
         self.model = model
         self.dataset = dataset
@@ -34,6 +34,7 @@ class TrainingPipeline:
         self.loader_kwargs = dataloader_kwargs(self.device)
         self.model.to(self.device)
         log.info("TrainingPipeline using %s", describe_device(self.device))
+        self._checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         
         # Configure hyperparameters
         train_cfg = self.config.get('training', {})
@@ -87,8 +88,8 @@ class TrainingPipeline:
         best_val_loss = float('-inf') if self.is_trajectory else float('inf')
         patience_counter = 0
         
-        checkpoint_dir = Path("checkpoints")
-        checkpoint_dir.mkdir(exist_ok=True)
+        checkpoint_dir = self._checkpoint_dir if self._checkpoint_dir else Path("checkpoints")
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
         prefix = "trajectory_" if self.is_trajectory else "predictor_"
         best_path = checkpoint_dir / f"{prefix}best.pt"
