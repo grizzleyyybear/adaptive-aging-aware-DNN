@@ -178,7 +178,7 @@ class AgingDataset(InMemoryDataset):
             # --- Future trajectory [N, HORIZON] ---
             future_acts = []
             for h in range(self.horizon):
-                noise = rng.normal(0, 0.03, size=result.switching_activity.shape)
+                noise = rng.normal(0, 0.01, size=result.switching_activity.shape)
                 future_act = float(h + 1) / self.horizon
                 future_acts.append({
                     "switching_activity": np.clip(

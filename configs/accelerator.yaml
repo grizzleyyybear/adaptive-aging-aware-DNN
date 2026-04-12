@@ -12,7 +12,7 @@ accelerator:
   num_mac_clusters: 16
   num_sram_banks: 8
   num_noc_routers: 4
-  num_layers: 10
+  num_layers: 15
 
   # Simulator throughput / memory parameters.
   mac_per_pe: 1

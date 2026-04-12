@@ -1,0 +1,122 @@
+[
+  {
+    "Workload": "ResNet-50",
+    "Method": "Initial",
+    "Peak Aging": 0.44991782307624817,
+    "Latency Cycles": 67587072.0,
+    "Energy (pJ)": 3316974827.2959995,
+    "TTF (Yrs)": 0.08110902061375236
+  },
+  {
+    "Workload": "ResNet-50",
+    "Method": "NSGA-II",
+    "Peak Aging": 0.1409117728471756,
+    "Latency Cycles": 7784461.633555456,
+    "Energy (pJ)": 3330813983.4417286,
+    "TTF (Yrs)": 0.12482508219017269
+  },
+  {
+    "Workload": "ResNet-50",
+    "Method": "PPO",
+    "Peak Aging": 0.2067088633775711,
+    "Latency Cycles": 21046651.270269636,
+    "Energy (pJ)": 3327090089.447017,
+    "TTF (Yrs)": 0.12482809403771163
+  },
+  {
+    "Workload": "BERT-Base",
+    "Method": "Initial",
+    "Peak Aging": 0.36784693598747253,
+    "Latency Cycles": 679477248.0,
+    "Energy (pJ)": 14109024690.464,
+    "TTF (Yrs)": 0.08110902061375236
+  },
+  {
+    "Workload": "BERT-Base",
+    "Method": "NSGA-II",
+    "Peak Aging": 0.06030019372701645,
+    "Latency Cycles": 77689936.83680001,
+    "Energy (pJ)": 14178251480.854149,
+    "TTF (Yrs)": 0.12483189627121571
+  },
+  {
+    "Workload": "BERT-Base",
+    "Method": "PPO",
+    "Peak Aging": 0.19114521145820618,
+    "Latency Cycles": 163200563.6512,
+    "Energy (pJ)": 14152165659.48018,
+    "TTF (Yrs)": 0.12482961719331406
+  },
+  {
+    "Workload": "MobileNetV2",
+    "Method": "Initial",
+    "Peak Aging": 0.4281598925590515,
+    "Latency Cycles": 38836224.0,
+    "Energy (pJ)": 1970574592.0320003,
+    "TTF (Yrs)": 0.08110902061375236
+  },
+  {
+    "Workload": "MobileNetV2",
+    "Method": "NSGA-II",
+    "Peak Aging": 0.2243012934923172,
+    "Latency Cycles": 20430370.376705233,
+    "Energy (pJ)": 1984785435.8600938,
+    "TTF (Yrs)": 0.12481184553533153
+  },
+  {
+    "Workload": "MobileNetV2",
+    "Method": "PPO",
+    "Peak Aging": 0.24293382465839386,
+    "Latency Cycles": 19877123.68030465,
+    "Energy (pJ)": 1980708580.1022959,
+    "TTF (Yrs)": 0.12482204758796225
+  },
+  {
+    "Workload": "EfficientNet-B4",
+    "Method": "Initial",
+    "Peak Aging": 0.42588356137275696,
+    "Latency Cycles": 439130412.0,
+    "Energy (pJ)": 8982908993.040998,
+    "TTF (Yrs)": 0.08110902061375236
+  },
+  {
+    "Workload": "EfficientNet-B4",
+    "Method": "NSGA-II",
+    "Peak Aging": 0.23367267847061157,
+    "Latency Cycles": 158777190.44432548,
+    "Energy (pJ)": 9016447239.82148,
+    "TTF (Yrs)": 0.1247980164572831
+  },
+  {
+    "Workload": "EfficientNet-B4",
+    "Method": "PPO",
+    "Peak Aging": 0.24564889073371887,
+    "Latency Cycles": 155370655.37007117,
+    "Energy (pJ)": 9002115421.822817,
+    "TTF (Yrs)": 0.12480685389294262
+  },
+  {
+    "Workload": "ViT-B/16",
+    "Method": "Initial",
+    "Peak Aging": 0.37273743748664856,
+    "Latency Cycles": 268664832.0,
+    "Energy (pJ)": 9325115386.975998,
+    "TTF (Yrs)": 0.08110902061375236
+  },
+  {
+    "Workload": "ViT-B/16",
+    "Method": "NSGA-II",
+    "Peak Aging": 0.1597743034362793,
+    "Latency Cycles": 70356601.8033023,
+    "Energy (pJ)": 9343673340.401377,
+    "TTF (Yrs)": 0.12482314690103757
+  },
+  {
+    "Workload": "ViT-B/16",
+    "Method": "PPO",
+    "Peak Aging": 0.2016817331314087,
+    "Latency Cycles": 71662433.6718255,
+    "Energy (pJ)": 9364383331.062445,
+    "TTF (Yrs)": 0.12482481880701332
+  }
+]
