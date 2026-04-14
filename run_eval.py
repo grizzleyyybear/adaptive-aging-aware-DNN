@@ -30,8 +30,12 @@ import torch
 from omegaconf import OmegaConf
 
 # ── Detect mode ──────────────────────────────────────────────────────
-FULL_MODE  = "--full"  in sys.argv
 SMOKE_MODE = "--smoke" in sys.argv
+PPO_ONLY   = "--ppo-only" in sys.argv
+NSGA_PPO_ONLY = ("--nsga-ppo-only" in sys.argv) or ("--opt-only" in sys.argv)
+# Optimization-only runs should default to full-sized NSGA/PPO unless the
+# user explicitly requests smoke mode.
+FULL_MODE  = ("--full" in sys.argv) or (NSGA_PPO_ONLY and not SMOKE_MODE)
 
 # Optional: --ckpt-dir /path/to/dir
 _CKPT_IDX = next((i for i, a in enumerate(sys.argv) if a == "--ckpt-dir"), None)
@@ -58,11 +62,38 @@ else:
     NSGA_GEN           = 12
     PPO_ITERS          = 15
     PPO_STEPS          = 32
-    DEVICE             = "cpu"
+    DEVICE             = "auto"
 
 TRAIN_EPOCHS = PRED_EPOCHS  # kept for backward compat display
 
 SEP = "=" * 68
+RESULTS_PATH = REPO_ROOT / "eval_results.json"
+
+
+def _default_metric_dict():
+    return {"loss": 0.0, "mae": 0.0, "rmse": 0.0, "r2": 0.0}
+
+
+def _load_existing_results():
+    if not RESULTS_PATH.exists():
+        return {}
+    try:
+        return json.loads(RESULTS_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_results(mode_label, dataset_size, predictor_metrics, trajectory_metrics, nsga2_metrics, ppo_metrics):
+    payload = {
+        "mode": mode_label,
+        "dataset_size": dataset_size,
+        "predictor": predictor_metrics,
+        "trajectory": trajectory_metrics,
+        "nsga2": nsga2_metrics,
+        "ppo": ppo_metrics,
+    }
+    RESULTS_PATH.write_text(json.dumps(payload, indent=2, default=str))
+    return payload
 
 
 def build_config(epochs=None, patience=None):
@@ -74,7 +105,7 @@ def build_config(epochs=None, patience=None):
             "num_mac_clusters": 16, "mac_clusters": 16,
             "num_sram_banks": 8, "sram_banks": 8,
             "num_noc_routers": 4, "noc_routers": 4,
-            "pe_array": [16, 16], "num_layers": 10,
+            "pe_array": [16, 16], "num_layers": 15,
             "max_macs_per_cluster": 256, "clock_ghz": 1.0,
             "sram_read_energy_pj": 2.0, "noc_hop_energy_pj": 0.5,
             "mac_energy_pj_per_op": 0.1, "ops_per_cycle": 2,
@@ -129,7 +160,7 @@ def main():
     from rl.environment import AgingControlEnv
     from rl.policy_network import ActorCritic
     from rl.trainer import PPOTrainer
-    from utils.runtime_eval import simulate_mapping
+    from utils.runtime_eval import load_pretrained_predictor, simulate_mapping
 
     # ── 1. Infrastructure ─────────────────────────────────────────────
     print("\n[1/6] Building infrastructure...", flush=True)
@@ -141,90 +172,147 @@ def main():
     print(f"  Graph: {N} nodes  |  {accel_cfg.mac_clusters} MACs, "
           f"{accel_cfg.sram_banks} SRAMs, {accel_cfg.noc_routers} Routers", flush=True)
 
-    # ── 2. Dataset ────────────────────────────────────────────────────
-    print(f"\n[2/6] Loading dataset ({DATASET_SIZE} samples)...", flush=True)
-    t0 = time.perf_counter()
-    dataset = AgingDataset(
-        root=str(REPO_ROOT / "data"),
-        split="train", size=DATASET_SIZE, cfg=cfg, seed=42,
-    )
-    n_samples = len(dataset)
-    print(f"  {n_samples} samples loaded ({time.perf_counter()-t0:.1f}s)", flush=True)
-    if n_samples == 0:
-        print("  ERROR: Dataset is empty. Run with --full or regenerate.", flush=True)
-        sys.exit(1)
+    existing_results = _load_existing_results()
+    pred_metrics = existing_results.get("predictor", _default_metric_dict())
+    traj_metrics = existing_results.get("trajectory", _default_metric_dict())
+    nsga_results = existing_results.get("nsga2", {})
+    ppo_out = existing_results.get("ppo", {"rewards": [], "first": 0.0, "last": 0.0, "best": 0.0, "mean": 0.0})
 
-    sample = dataset[0]
-    feat_dim = int(sample.x.shape[1])
-    horizon  = cfg.model.prediction_horizon
-
-    # ── 3. Predictor ──────────────────────────────────────────────────
-    print(f"\n[3/6] Training predictor (up to {PRED_EPOCHS} epochs, patience={PRED_PATIENCE})...", flush=True)
-    predictor = HybridGNNTransformer(
-        node_feature_dim=feat_dim,
-        hidden_dim=cfg.model.hidden_dim,
-        gat_heads=cfg.model.gat_heads,
-        transformer_layers=cfg.model.transformer_layers,
-        transformer_heads=cfg.model.transformer_heads,
-        seq_len=horizon,
-    )
-    pred_metrics = TrainingPipeline(pred_cfg, predictor, dataset, checkpoint_dir=CKPT_DIR).train()
-    print(f"  R² = {pred_metrics['r2']:.4f}  |  "
-          f"MAE = {pred_metrics['mae']:.4f}  |  "
-          f"RMSE = {pred_metrics['rmse']:.4f}", flush=True)
-
-    # ── 4. Trajectory predictor ───────────────────────────────────────
-    print(f"\n[4/6] Training trajectory predictor (up to {TRAJ_EPOCHS} epochs, patience={TRAJ_PATIENCE})...", flush=True)
-    traj_pred = TrajectoryPredictor(
-        gnn_encoder=predictor,
-        hidden_dim=cfg.model.hidden_dim,
-        horizon=horizon, gamma=0.95,
-    )
-    traj_metrics = TrainingPipeline(traj_cfg, traj_pred, dataset, checkpoint_dir=CKPT_DIR).train()
-    print(f"  R² = {traj_metrics['r2']:.4f}  |  "
-          f"MAE = {traj_metrics['mae']:.4f}  |  "
-          f"RMSE = {traj_metrics['rmse']:.4f}", flush=True)
-
-    # ── 5. NSGA-II ────────────────────────────────────────────────────
-    print(f"\n[5/6] NSGA-II optimization (pop={NSGA_POP}, gen={NSGA_GEN})...", flush=True)
-    wr = WorkloadRunner(None)
-    workloads = ["ResNet-50", "BERT-Base", "MobileNetV2", "EfficientNet-B4", "ViT-B/16"]
-    nsga_results = {}
-    dev = next(predictor.parameters()).device
-
-    for wl in workloads:
-        layers   = wr.get_workload_layers(wl)
-        init_map = np.arange(len(layers), dtype=np.int32) % accel_cfg.mac_clusters
-
-        # Initial (round-robin) peak aging
-        init_m = simulate_mapping(
-            simulator=sim, feature_builder=fb, graph=graph,
-            layers=layers, mapping=init_map, workload_name=wl,
-            stress_time_s=360_000.0, predictor=predictor, device=dev,
+    if PPO_ONLY:
+        print("\n[2-5/6] Skipping dataset, predictor, trajectory, and NSGA-II.", flush=True)
+        if existing_results:
+            print(f"  Preserving existing results from {RESULTS_PATH}", flush=True)
+        else:
+            print(f"  No previous {RESULTS_PATH.name} found; only PPO metrics will be fresh.", flush=True)
+    elif NSGA_PPO_ONLY:
+        print("\n[2-4/6] Skipping dataset, predictor, and trajectory training.", flush=True)
+        predictor, pred_device, pred_ckpt = load_pretrained_predictor(
+            cfg,
+            checkpoint_candidates=[
+                REPO_ROOT / "outputs/best_predictor.pt",
+                REPO_ROOT / "outputs/models/hybrid_gnn_transformer.pt",
+                CKPT_DIR / "predictor_best.pt",
+                CKPT_DIR / "predictor_last.pt",
+            ],
+            device_request=DEVICE,
         )
-        init_peak = init_m["peak_aging"]
+        print(f"  Loaded predictor checkpoint: {pred_ckpt}", flush=True)
+        print(f"  Predictor device: {pred_device}", flush=True)
+    else:
+        # ── 2. Dataset ────────────────────────────────────────────────────
+        print(f"\n[2/6] Loading dataset ({DATASET_SIZE} samples)...", flush=True)
+        t0 = time.perf_counter()
+        dataset = AgingDataset(
+            root=str(REPO_ROOT / "data"),
+            split="train", size=DATASET_SIZE, cfg=cfg, seed=42,
+        )
+        n_samples = len(dataset)
+        print(f"  {n_samples} samples loaded ({time.perf_counter()-t0:.1f}s)", flush=True)
+        if n_samples == 0:
+            print("  ERROR: Dataset is empty. Run with --full or regenerate.", flush=True)
+            sys.exit(1)
 
-        nsga_cfg = OmegaConf.create({
-            "pop_size": NSGA_POP, "population_size": NSGA_POP,
-            "crossover_prob": 0.9, "mutation_prob": 0.1,
-            "n_gen": NSGA_GEN, "seed": 42,
-            "balance_weight": 0.3, "convergence_patience": 8,
-            "workload_name": wl,
-        })
-        opt = NSGA2Optimizer(accel_cfg, sim, predictor, nsga_cfg)
-        pareto = opt.run(init_map, n_gen=NSGA_GEN, workload_name=wl)
+        sample = dataset[0]
+        feat_dim = int(sample.x.shape[1])
+        horizon  = cfg.model.prediction_horizon
 
-        best = min((s.peak_aging for s in pareto), default=init_peak)
-        red  = (init_peak - best) / max(init_peak, 1e-9) * 100
-        nsga_results[wl] = {
-            "count": len(pareto), "init": init_peak,
-            "best": best, "reduction": red,
-            "cache_hits": opt._cache.hits,
-            "converged_gen": len(opt.hv_history),
-        }
-        print(f"  {wl:20s}  {len(pareto):2d} sols  "
-              f"peak {init_peak:.4f}->{best:.4f}  ({red:+.1f}%)  "
-              f"cache={opt._cache.hits}h  conv@{len(opt.hv_history)}gen", flush=True)
+        # ── 3. Predictor ──────────────────────────────────────────────────
+        print(f"\n[3/6] Training predictor (up to {PRED_EPOCHS} epochs, patience={PRED_PATIENCE})...", flush=True)
+        predictor = HybridGNNTransformer(
+            node_feature_dim=feat_dim,
+            hidden_dim=cfg.model.hidden_dim,
+            gat_heads=cfg.model.gat_heads,
+            transformer_layers=cfg.model.transformer_layers,
+            transformer_heads=cfg.model.transformer_heads,
+            seq_len=horizon,
+        )
+        pred_metrics = TrainingPipeline(pred_cfg, predictor, dataset, checkpoint_dir=CKPT_DIR).train()
+        print(f"  R² = {pred_metrics['r2']:.4f}  |  "
+              f"MAE = {pred_metrics['mae']:.4f}  |  "
+              f"RMSE = {pred_metrics['rmse']:.4f}", flush=True)
+        _save_results(
+            mode_label=mode_label,
+            dataset_size=DATASET_SIZE,
+            predictor_metrics=pred_metrics,
+            trajectory_metrics=traj_metrics,
+            nsga2_metrics=nsga_results,
+            ppo_metrics=ppo_out,
+        )
+        print(f"  Intermediate results saved after step 3 to {RESULTS_PATH}", flush=True)
+
+        # ── 4. Trajectory predictor ───────────────────────────────────────
+        print(f"\n[4/6] Training trajectory predictor (up to {TRAJ_EPOCHS} epochs, patience={TRAJ_PATIENCE})...", flush=True)
+        traj_pred = TrajectoryPredictor(
+            gnn_encoder=predictor,
+            hidden_dim=cfg.model.hidden_dim,
+            horizon=horizon, gamma=0.95,
+        )
+        traj_metrics = TrainingPipeline(traj_cfg, traj_pred, dataset, checkpoint_dir=CKPT_DIR).train()
+        print(f"  R² = {traj_metrics['r2']:.4f}  |  "
+              f"MAE = {traj_metrics['mae']:.4f}  |  "
+              f"RMSE = {traj_metrics['rmse']:.4f}", flush=True)
+        _save_results(
+            mode_label=mode_label,
+            dataset_size=DATASET_SIZE,
+            predictor_metrics=pred_metrics,
+            trajectory_metrics=traj_metrics,
+            nsga2_metrics=nsga_results,
+            ppo_metrics=ppo_out,
+        )
+        print(f"  Intermediate results saved after step 4 to {RESULTS_PATH}", flush=True)
+
+    if not PPO_ONLY:
+        # ── 5. NSGA-II ────────────────────────────────────────────────────
+        print(f"\n[5/6] NSGA-II optimization (pop={NSGA_POP}, gen={NSGA_GEN})...", flush=True)
+        wr = WorkloadRunner(None)
+        workloads = ["ResNet-50", "BERT-Base", "MobileNetV2", "EfficientNet-B4", "ViT-B/16"]
+        nsga_results = {}
+        dev = next(predictor.parameters()).device
+
+        for wl in workloads:
+            layers   = wr.get_workload_layers(wl)
+            init_map = np.zeros(len(layers), dtype=np.int32)
+
+            # Initial static baseline peak aging
+            init_m = simulate_mapping(
+                simulator=sim, feature_builder=fb, graph=graph,
+                layers=layers, mapping=init_map, workload_name=wl,
+                stress_time_s=360_000.0, predictor=predictor, device=dev,
+            )
+            init_peak = init_m["peak_aging"]
+
+            nsga_cfg = OmegaConf.create({
+                "pop_size": NSGA_POP, "population_size": NSGA_POP,
+                "crossover_prob": 0.9, "mutation_prob": 0.1,
+                "n_gen": NSGA_GEN, "seed": 42,
+                "balance_weight": 0.3, "convergence_patience": 8,
+                "workload_name": wl,
+            })
+            opt = NSGA2Optimizer(accel_cfg, sim, predictor, nsga_cfg)
+            pareto = opt.run(init_map, n_gen=NSGA_GEN, workload_name=wl)
+
+            best = min((s.peak_aging for s in pareto), default=init_peak)
+            red  = (init_peak - best) / max(init_peak, 1e-9) * 100
+            nsga_results[wl] = {
+                "count": len(pareto), "init": init_peak,
+                "best": best, "reduction": red,
+                "cache_hits": opt._cache.hits,
+                "converged_gen": len(opt.hv_history),
+                "baseline": "static_zero",
+            }
+            print(f"  {wl:20s}  {len(pareto):2d} sols  "
+                  f"peak {init_peak:.4f}->{best:.4f}  ({red:+.1f}%)  "
+                  f"cache={opt._cache.hits}h  conv@{len(opt.hv_history)}gen", flush=True)
+
+        _save_results(
+            mode_label=mode_label,
+            dataset_size=DATASET_SIZE,
+            predictor_metrics=pred_metrics,
+            trajectory_metrics=traj_metrics,
+            nsga2_metrics=nsga_results,
+            ppo_metrics=ppo_out,
+        )
+        print(f"  Intermediate results saved to {RESULTS_PATH}", flush=True)
 
     # ── 6. PPO ────────────────────────────────────────────────────────
     print(f"\n[6/6] PPO training ({PPO_ITERS} iterations, {PPO_STEPS} steps/iter)...", flush=True)
@@ -320,19 +408,18 @@ def main():
     print(f"\n  {passed}/{len(checks)} checks passed")
 
     # ── Save JSON ─────────────────────────────────────────────────────
-    out = {
-        "mode": mode_label,
-        "dataset_size": DATASET_SIZE,
-        "predictor": pred_metrics,
-        "trajectory": traj_metrics,
-        "nsga2": nsga_results,
-        "ppo": {"rewards": [float(r) for r in rewards],
-                "first": float(first_r), "last": float(last_r),
-                "best": float(best_r), "mean": float(mean_r)},
-    }
-    out_path = REPO_ROOT / "eval_results.json"
-    out_path.write_text(json.dumps(out, indent=2, default=str))
-    print(f"\n  Results saved to {out_path}")
+    ppo_out = {"rewards": [float(r) for r in rewards],
+               "first": float(first_r), "last": float(last_r),
+               "best": float(best_r), "mean": float(mean_r)}
+    _save_results(
+        mode_label=mode_label,
+        dataset_size=DATASET_SIZE,
+        predictor_metrics=pred_metrics,
+        trajectory_metrics=traj_metrics,
+        nsga2_metrics=nsga_results,
+        ppo_metrics=ppo_out,
+    )
+    print(f"\n  Results saved to {RESULTS_PATH}")
     print(f"\n{SEP}\n")
 
 

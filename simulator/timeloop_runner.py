@@ -241,9 +241,7 @@ class AnalyticalSimulator:
             layer_mapping = [int(mapping_arr[idx])]
             layer_results.append(self._attach_activity_traces(self.simulate_layer(layer), mapping=layer_mapping))
 
-        mac_util = np.mean([r.mac_utilization for r in layer_results], axis=0).astype(np.float32)
-        sram_access = np.mean([r.sram_access_rate for r in layer_results], axis=0).astype(np.float32)
-        noc_traffic = np.mean([r.noc_traffic for r in layer_results], axis=0).astype(np.float32)
+        mac_util, sram_access, noc_traffic = self._aggregate_mapping_activity(layer_results, mapping_arr)
         switching = np.concatenate([mac_util, sram_access, noc_traffic]).astype(np.float32)
 
         total_latency_cycles = self._compute_mapping_aware_latency(layer_results, mapping_arr)
@@ -254,7 +252,13 @@ class AnalyticalSimulator:
         total_throughput = float(sum(r.throughput_gops for r in layer_results))
         mean_utilisation = float(np.mean([r.utilisation for r in layer_results]))
         mean_compute_intensity = float(np.mean([r.compute_intensity for r in layer_results]))
-        mean_stress = np.mean([r.per_pe_stress for r in layer_results], axis=0).astype(np.float32)
+        latency_weights = np.asarray([max(r.latency_cycles, 1.0) for r in layer_results], dtype=np.float64)
+        latency_weights /= max(float(np.sum(latency_weights)), 1.0)
+        mean_stress = np.average(
+            np.stack([r.per_pe_stress for r in layer_results], axis=0),
+            axis=0,
+            weights=latency_weights,
+        ).astype(np.float32)
 
         return SimResult(
             layer_name="workload",
@@ -297,7 +301,8 @@ class AnalyticalSimulator:
 
     def _compute_mapping_aware_latency(self, layer_results: List[SimResult], mapping_arr: np.ndarray) -> float:
         """
-        Clusters execute in parallel; total latency = max cluster load + NoC overhead.
+        Clusters execute in parallel; total latency is dominated by the busiest
+        cluster plus mapping-dependent communication and synchronization costs.
         """
         cluster_loads: dict[int, float] = defaultdict(float)
         for idx, result in enumerate(layer_results):
@@ -305,28 +310,42 @@ class AnalyticalSimulator:
             cluster_loads[cluster] += result.latency_cycles
 
         parallel_latency = max(cluster_loads.values()) if cluster_loads else 0.0
-        num_unique_clusters = len(cluster_loads)
-        comm_overhead = max(num_unique_clusters - 1, 0) * self.cfg.noc_latency_cycles
-        return parallel_latency + comm_overhead
+        active_loads = np.asarray(list(cluster_loads.values()), dtype=np.float64)
+        mean_active_load = float(np.mean(active_loads)) if active_loads.size else 0.0
+        imbalance_ratio = parallel_latency / max(mean_active_load, 1.0)
+
+        noc_bw_bytes_per_cycle = max((self.cfg.noc_bw_gb_s * 1e9) / self.eff_freq_hz, 1e-6)
+        transitions = self._collect_intercluster_transfers(layer_results, mapping_arr)
+        transfer_cycles = sum(t["bytes"] * max(t["hops"], 1) / noc_bw_bytes_per_cycle for t in transitions)
+        setup_cycles = sum(self.cfg.noc_latency_cycles * (1.0 + 0.15 * max(t["hops"] - 1, 0)) for t in transitions)
+        contention = 1.0 + 0.12 * max(imbalance_ratio - 1.0, 0.0) + 0.05 * max(len(cluster_loads) - 1, 0)
+        sync_penalty = parallel_latency * 0.08 * max(imbalance_ratio - 1.0, 0.0)
+        return parallel_latency + (transfer_cycles * contention) + setup_cycles + sync_penalty
 
     def _compute_mapping_aware_energy(self, layer_results: List[SimResult], mapping_arr: np.ndarray) -> float:
         """
-        Total energy = compute energy + NoC transfer energy + idle cluster leakage.
+        Total energy = compute energy + mapping-dependent transfer/reuse costs
+        + leakage from active/idle clusters over the workload duration.
         """
         compute_energy = sum(r.energy_pj for r in layer_results)
-
-        noc_transfers = 0.0
-        for i in range(len(mapping_arr) - 1):
-            if int(mapping_arr[i]) != int(mapping_arr[i + 1]):
-                noc_transfers += layer_results[i].dram_accesses_bytes * 0.1
-        noc_energy = noc_transfers * self.cfg.noc_energy_per_byte_pj
+        transitions = self._collect_intercluster_transfers(layer_results, mapping_arr)
+        noc_energy = sum(
+            t["bytes"] * max(t["hops"], 1) * self.cfg.noc_energy_per_byte_pj
+            for t in transitions
+        )
+        data_reuse_penalty = sum(
+            t["bytes"] * 0.08 * self.cfg.sram_rd_energy_pj * (1.0 + 0.2 * max(t["hops"] - 1, 0))
+            for t in transitions
+        )
 
         active_clusters = len(set(int(c) for c in mapping_arr))
         idle_clusters = max(self.cfg.mac_clusters - active_clusters, 0)
-        max_layer_latency = max((r.latency_cycles for r in layer_results), default=0.0)
-        idle_leakage = idle_clusters * self.cfg.idle_leakage_pj_per_cycle * max_layer_latency
+        total_latency = self._compute_mapping_aware_latency(layer_results, mapping_arr)
+        active_leakage = active_clusters * self.cfg.idle_leakage_pj_per_cycle * total_latency * 0.35
+        idle_leakage = idle_clusters * self.cfg.idle_leakage_pj_per_cycle * total_latency
+        wakeup_energy = active_clusters * self.cfg.noc_latency_cycles * 5.0
 
-        return compute_energy + noc_energy + idle_leakage
+        return compute_energy + noc_energy + data_reuse_penalty + active_leakage + idle_leakage + wakeup_energy
 
     # ------------------------------------------------------------------
     # Layer-type simulators
@@ -552,6 +571,79 @@ class AnalyticalSimulator:
             noc_traffic=noc_traffic,
             switching_activity=switching,
         )
+
+    def _aggregate_mapping_activity(self, layer_results: List[SimResult], mapping_arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        latency_weights = np.asarray([max(r.latency_cycles, 1.0) for r in layer_results], dtype=np.float64)
+        latency_weights /= max(float(np.sum(latency_weights)), 1.0)
+        byte_weights = np.asarray([max(r.dram_accesses_bytes, 1.0) for r in layer_results], dtype=np.float64)
+        byte_weights /= max(float(np.sum(byte_weights)), 1.0)
+
+        mac_util = np.average(
+            np.stack([r.mac_utilization for r in layer_results], axis=0),
+            axis=0,
+            weights=latency_weights,
+        )
+        sram_access = np.average(
+            np.stack([r.sram_access_rate for r in layer_results], axis=0),
+            axis=0,
+            weights=byte_weights,
+        )
+        noc_traffic = np.average(
+            np.stack([r.noc_traffic for r in layer_results], axis=0),
+            axis=0,
+            weights=byte_weights,
+        )
+
+        router_bytes = np.zeros(self.cfg.noc_routers, dtype=np.float64)
+        for transfer in self._collect_intercluster_transfers(layer_results, mapping_arr):
+            src_router = int(transfer["src"]) % max(self.cfg.noc_routers, 1)
+            dst_router = int(transfer["dst"]) % max(self.cfg.noc_routers, 1)
+            traffic = transfer["bytes"] * max(transfer["hops"], 1)
+            if src_router == dst_router:
+                router_bytes[src_router] += traffic
+            else:
+                router_bytes[src_router] += 0.5 * traffic
+                router_bytes[dst_router] += 0.5 * traffic
+        if np.max(router_bytes) > 0:
+            noc_traffic = 0.35 * noc_traffic + 0.65 * (router_bytes / np.max(router_bytes))
+
+        return (
+            np.clip(mac_util, 0.0, 1.0).astype(np.float32),
+            np.clip(sram_access, 0.0, 1.0).astype(np.float32),
+            np.clip(noc_traffic, 0.0, 1.0).astype(np.float32),
+        )
+
+    def _collect_intercluster_transfers(self, layer_results: List[SimResult], mapping_arr: np.ndarray) -> list[dict[str, float]]:
+        transfers: list[dict[str, float]] = []
+        for idx in range(len(mapping_arr) - 1):
+            src = int(mapping_arr[idx])
+            dst = int(mapping_arr[idx + 1])
+            if src == dst:
+                continue
+
+            producer_bytes = float(layer_results[idx].dram_accesses_bytes)
+            consumer_bytes = float(layer_results[idx + 1].dram_accesses_bytes)
+            activation_bytes = max(min(producer_bytes, consumer_bytes) * 0.22, 1.0)
+            hops = self._cluster_distance(src, dst)
+            transfers.append(
+                {
+                    "src": float(src),
+                    "dst": float(dst),
+                    "bytes": activation_bytes,
+                    "hops": float(hops),
+                }
+            )
+        return transfers
+
+    def _cluster_distance(self, src_cluster: int, dst_cluster: int) -> int:
+        if src_cluster == dst_cluster:
+            return 0
+
+        rows = max(int(round(math.sqrt(max(self.cfg.mac_clusters, 1)))), 1)
+        cols = int(math.ceil(max(self.cfg.mac_clusters, 1) / rows))
+        src_r, src_c = divmod(int(src_cluster), cols)
+        dst_r, dst_c = divmod(int(dst_cluster), cols)
+        return max(abs(src_r - dst_r) + abs(src_c - dst_c), 1)
 
     def _empty_workload_result(self) -> SimResult:
         return SimResult(

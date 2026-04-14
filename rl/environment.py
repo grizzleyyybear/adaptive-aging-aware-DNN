@@ -135,7 +135,7 @@ class AgingControlEnv(gym.Env):
 
     def _set_workload(self, workload_name: str) -> None:
         self.current_workload = workload_name
-        self._current_layers = list(self.wr.get_workload_layers(workload_name))
+        self._current_layers = list(self.wr.get_workload_layers(workload_name))[: self.L]
         mapping = normalize_mapping(self._mapping_int, len(self._current_layers), self.num_macs)
         self._mapping_int[:] = 0
         self._mapping_int[: len(mapping)] = mapping

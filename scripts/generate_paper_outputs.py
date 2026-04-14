@@ -1,18 +1,11 @@
 """
-Generate all paper figures and tables for the adaptive-aging-aware-DNN project.
-
-Usage:
-    python scripts/generate_paper_outputs.py
-
-Outputs:
-    outputs/plots/fig{1-8}_*.pdf
-    outputs/tables/table{1-3}_*.{tex,csv}
+Generate the paper figures from real evaluation artifacts.
 """
 
 from __future__ import annotations
 
-import copy
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -20,804 +13,671 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import numpy as np
-import torch
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-from matplotlib.colors import Normalize
-from matplotlib.cm import ScalarMappable
+import networkx as nx
+import numpy as np
 import pandas as pd
+import torch
+from matplotlib.colors import Normalize
+from omegaconf import OmegaConf
+from torch_geometric.loader import DataLoader
 
-# ---------------------------------------------------------------------------
-# Style
-# ---------------------------------------------------------------------------
+from graph.accelerator_graph import AcceleratorGraph
+from graph.graph_dataset import AgingDataset
+from models.hybrid_gnn_transformer import HybridGNNTransformer
+from models.trajectory_predictor import TrajectoryPredictor
+from utils.device import dataloader_kwargs
+from utils.runtime_eval import load_pretrained_predictor, load_pretrained_trajectory
+
+
 plt.rcParams.update({
     "font.size": 11,
     "axes.labelsize": 13,
-    "axes.titlesize": 12,
-    "legend.fontsize": 10,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
     "figure.dpi": 300,
-    "pdf.fonttype": 42,
-    "ps.fonttype": 42,
+    "font.family": "serif",
+    "savefig.bbox": "tight",
 })
 
-COL1 = (4, 3)   # single-column figure
-COL2 = (8, 3)   # double-column figure
-
 COLOR_INITIAL = "#888888"
-COLOR_NSGA    = "#2563EB"
-COLOR_PPO     = "#16A34A"
+COLOR_NSGA = "#4682B4"
+COLOR_PPO = "#2E8B57"
 WORKLOAD_COLORS = {
-    "ResNet-50":      "#E63946",
-    "BERT-Base":      "#F4A261",
-    "MobileNetV2":    "#2A9D8F",
-    "EfficientNet-B4":"#457B9D",
-    "ViT-B/16":       "#7B2D8B",
+    "ResNet-50": "coral",
+    "BERT-Base": "orange",
+    "MobileNetV2": "teal",
+    "EfficientNet-B4": "royalblue",
+    "ViT-B/16": "purple",
 }
-WORKLOAD_LIST = ["ResNet-50", "MobileNetV2", "EfficientNet-B4", "BERT-Base", "ViT-B/16"]
-
-NODES_PER_GRAPH = 28
-EDGES_PER_GRAPH = 92
-
-# ---------------------------------------------------------------------------
-# Hardcoded fallback data
-# ---------------------------------------------------------------------------
-EVAL_TABLE = [
-    ("ResNet-50",      "Initial", 0.435324, 16206848.0, 9.585204e+08, 0.081109),
-    ("ResNet-50",      "NSGA-II", 0.214237,  7376272.0, 9.604635e+08, 0.792668),
-    ("ResNet-50",      "PPO",     0.215488,  7376272.0, 9.604635e+08, 0.792668),
-    ("BERT-Base",      "Initial", 0.472681,169869312.0, 3.519881e+09, 0.081109),
-    ("BERT-Base",      "NSGA-II", 0.265129, 75497672.0, 3.523687e+09, 0.285352),
-    ("BERT-Base",      "PPO",     0.268060, 75497672.0, 3.523687e+09, 0.285352),
-    ("MobileNetV2",    "Initial", 0.458472,  8304128.0, 5.587935e+08, 0.081109),
-    ("MobileNetV2",    "NSGA-II", 0.253518,  7225544.0, 5.597354e+08, 0.285352),
-    ("MobileNetV2",    "PPO",     0.254053,  7225544.0, 5.597354e+08, 0.285352),
-    ("EfficientNet-B4","Initial", 0.469593, 52308900.0, 2.452167e+09, 0.081109),
-    ("EfficientNet-B4","NSGA-II", 0.260888, 46785800.0, 2.455994e+09, 0.285352),
-    ("EfficientNet-B4","PPO",     0.260948, 46785800.0, 2.455994e+09, 0.285352),
-    ("ViT-B/16",       "Initial", 0.474772, 72585216.0, 2.506849e+09, 0.081109),
-    ("ViT-B/16",       "NSGA-II", 0.173718, 29049132.0, 2.510214e+09, 0.507302),
-    ("ViT-B/16",       "PPO",     0.229161, 29049132.0, 2.510214e+09, 0.507302),
-]
-
-PPO_REWARDS = [
-    -0.61, -0.53, -0.49, -0.19, -0.06, -0.17, -0.15, -0.07,  0.11, -0.07,
-    -0.03,  0.02,  0.01,  0.12,  0.09,  0.05,  0.06,  0.12,  0.09, -0.17,
-     0.08,  0.07,  0.05,  0.22,  0.23,  0.09,  0.17,  0.09,  0.20,  0.05,
-     0.12,  0.18,  0.23,  0.22,  0.31,  0.32,  0.21,  0.29,  0.34,  0.36,
-]
-
-TRAJ_STEP_R2 = [0.72, 0.75, 0.77, 0.78, 0.78, 0.79, 0.78, 0.78, 0.78, 0.78]
-
-ABLATION = {
-    "GCN only":        {"r2": 0.87,   "mae": 0.032},
-    "GCN+GAT":         {"r2": 0.92,   "mae": 0.021},
-    "GCN+Transformer": {"r2": 0.95,   "mae": 0.014},
-    "Full model":      {"r2": 0.9925, "mae": 0.005},
-}
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-PLOTS_DIR  = REPO_ROOT / "outputs" / "plots"
-TABLES_DIR = REPO_ROOT / "outputs" / "tables"
+WORKLOAD_ORDER = ["ResNet-50", "BERT-Base", "MobileNetV2", "EfficientNet-B4", "ViT-B/16"]
+PLOTS_DIR = REPO_ROOT / "outputs" / "plots"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
-TABLES_DIR.mkdir(parents=True, exist_ok=True)
-
-PREDICTOR_CKPT  = REPO_ROOT / "outputs" / "best_predictor.pt"
-TRAJECTORY_CKPT = REPO_ROOT / "outputs" / "best_trajectory.pt"
-TEST_PT         = REPO_ROOT / "data" / "processed" / "aging_test_5000_mac16_feat8.pt"
-PARETO_JSON     = REPO_ROOT / "outputs" / "pareto_objectives.json"
-
-# ---------------------------------------------------------------------------
-# Model / data loading helpers
-# ---------------------------------------------------------------------------
-
-def load_predictor(device: torch.device):
-    from models.hybrid_gnn_transformer import HybridGNNTransformer
-    model = HybridGNNTransformer(
-        node_feature_dim=8, hidden_dim=256,
-        gat_heads=4, transformer_layers=2, transformer_heads=4, seq_len=1,
-    ).to(device)
-    model.load_state_dict(torch.load(PREDICTOR_CKPT, map_location=device))
-    model.eval()
-    return model
 
 
-def load_trajectory(predictor, device: torch.device):
-    from models.trajectory_predictor import TrajectoryPredictor
-    enc = copy.deepcopy(predictor).to(device)
-    model = TrajectoryPredictor(gnn_encoder=enc, hidden_dim=256, horizon=10).to(device)
-    model.load_state_dict(torch.load(TRAJECTORY_CKPT, map_location=device))
-    model.eval()
-    return model
+def load_cfg():
+    accel = OmegaConf.load(REPO_ROOT / "configs/accelerator.yaml")
+    workloads = OmegaConf.load(REPO_ROOT / "configs/workloads.yaml")
+    training = OmegaConf.load(REPO_ROOT / "configs/training.yaml")
+    experiments = OmegaConf.load(REPO_ROOT / "configs/experiments.yaml")
+    cfg = OmegaConf.merge(experiments, accel, workloads, training)
+    cfg.model.prediction_horizon = 10
+    cfg.runtime.device = "cuda"
+    return cfg
 
 
-class PackedTestDataset(torch.utils.data.Dataset):
-    def __init__(self, path: Path):
-        raw = torch.load(path, map_location="cpu")
-        d = raw[0]
-        self.x         = d["x"]            # [140000, 8]
-        self.y         = d["y"]            # [140000, 1]
-        self.y_traj    = d["y_trajectory"] # [140000, 10]
-        self.edge_attr_all = d["edge_attr"]
-        self.edge_index = d["edge_index"][:, :EDGES_PER_GRAPH].clone()
-        # workload labels per sample: [5000, 5] → argmax
-        wemb = d["workload_emb"].reshape(5000, 5)
-        self.wl_idx = wemb.argmax(dim=1).tolist()   # 0-4
-        self.n_graphs = self.x.shape[0] // NODES_PER_GRAPH
-
-    def __len__(self):
-        return self.n_graphs
-
-    def __getitem__(self, i):
-        from torch_geometric.data import Data
-        sn = i * NODES_PER_GRAPH
-        se = i * EDGES_PER_GRAPH
-        return Data(
-            x          = self.x[sn : sn + NODES_PER_GRAPH],
-            edge_index = self.edge_index,
-            edge_attr  = self.edge_attr_all[se : se + EDGES_PER_GRAPH],
-            y          = self.y[sn : sn + NODES_PER_GRAPH],
-            y_trajectory = self.y_traj[sn : sn + NODES_PER_GRAPH],
-        )
+def require_file(path: Path) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(f"Required artifact is missing: {path}")
+    return path
 
 
-def run_predictor_on_test(predictor, device, max_samples=2000):
-    """Returns (y_pred [N], y_true [N], wl_labels [n_graphs])."""
-    from torch_geometric.loader import DataLoader
-    ds = PackedTestDataset(TEST_PT)
-    n = min(max_samples, len(ds))
-    loader = DataLoader(ds, batch_size=256, shuffle=False)
-    preds, labels, wl_labels = [], [], []
-    seen = 0
-    with torch.no_grad():
-        for batch in loader:
-            if seen >= n:
-                break
-            batch = batch.to(device)
-            p = predictor(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
-            preds.append(p.view(-1).cpu().numpy())
-            labels.append(batch.y.view(-1).cpu().numpy())
-            bs = batch.num_graphs
-            seen += bs
-    preds  = np.concatenate(preds)
-    labels = np.concatenate(labels)
-    wl_labels_all = [WORKLOAD_LIST[i] for i in ds.wl_idx[:n]]
-    # expand per-node (28 nodes per graph)
-    wl_per_node = np.repeat(wl_labels_all, NODES_PER_GRAPH)[:len(preds)]
-    return preds, labels, wl_per_node
+def load_json(path: Path):
+    require_file(path)
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
 
 
-def r2_score(pred, true):
-    ss_res = ((pred - true) ** 2).sum()
-    ss_tot = ((true - true.mean()) ** 2).sum()
-    return float(1.0 - ss_res / (ss_tot + 1e-12))
-
-
-def mae_score(pred, true):
-    return float(np.abs(pred - true).mean())
-
-
-def rmse_score(pred, true):
-    return float(np.sqrt(((pred - true) ** 2).mean()))
-
-
-def moving_average(x, w):
-    return np.convolve(x, np.ones(w) / w, mode="same")
-
-
-# ---------------------------------------------------------------------------
-# Figure helpers
-# ---------------------------------------------------------------------------
-
-def savefig(fig, path: Path):
-    fig.savefig(path, bbox_inches="tight", dpi=300)
+def savefig(fig, filename: str, generated: list[Path]):
+    path = PLOTS_DIR / filename
+    fig.savefig(path)
     plt.close(fig)
-    print(f"  Saved: {path.relative_to(REPO_ROOT)}")
+    generated.append(path)
+    print(f"  saved: {path.relative_to(REPO_ROOT)}")
 
 
-# ===========================================================================
-# FIG 1 — Predicted vs Ground Truth scatter
-# ===========================================================================
-
-def fig1_prediction_scatter(predictor, device, generated):
-    print("[Fig 1] Prediction scatter...")
-    try:
-        preds, labels, _ = run_predictor_on_test(predictor, device, max_samples=2000)
-        r2  = r2_score(preds, labels)
-        mae = mae_score(preds, labels)
-    except Exception as e:
-        print(f"  Warning: inference failed ({e}), using synthetic data")
-        rng = np.random.default_rng(0)
-        labels = rng.uniform(0, 0.75, 5000)
-        noise  = rng.normal(0, 0.008, 5000)
-        preds  = np.clip(labels + noise, 0, 1)
-        r2, mae = 0.9925, 0.005
-
-    fig, ax = plt.subplots(figsize=COL1)
-    hb = ax.hexbin(labels, preds, gridsize=40, cmap="YlOrRd", mincnt=1, linewidths=0.1)
-    cb = fig.colorbar(hb, ax=ax, label="Count")
-    cb.ax.tick_params(labelsize=9)
-    lo, hi = min(labels.min(), preds.min()), max(labels.max(), preds.max())
-    ax.plot([lo, hi], [lo, hi], "r--", lw=1.4, label="Ideal")
-    ax.set_xlabel("Ground Truth Aging Score")
-    ax.set_ylabel("Predicted Aging Score")
-    ax.annotate(
-        f"$R^2={r2:.4f}$\nMAE$={mae:.3f}$",
-        xy=(0.05, 0.88), xycoords="axes fraction",
-        fontsize=10, va="top",
-        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8),
-    )
-    ax.legend(loc="lower right", fontsize=9)
-    ax.set_xlim(lo - 0.02, hi + 0.02)
-    ax.set_ylim(lo - 0.02, hi + 0.02)
-    out = PLOTS_DIR / "fig1_prediction_scatter.pdf"
-    savefig(fig, out)
-    generated.append(out)
-    return preds, labels
+def moving_average(values: np.ndarray, window: int) -> np.ndarray:
+    if len(values) == 0:
+        return values
+    if len(values) < window:
+        return np.full_like(values, np.mean(values), dtype=np.float64)
+    kernel = np.ones(window, dtype=np.float64) / float(window)
+    return np.convolve(values, kernel, mode="same")
 
 
-# ===========================================================================
-# FIG 2 — Ablation study (hardcoded pattern, full-model verified by inference)
-# ===========================================================================
-
-def fig2_ablation_bars(predictor, device, generated):
-    print("[Fig 2] Ablation bars...")
-
-    ablation = dict(ABLATION)
-
-    # Verify full-model numbers with a quick inference pass
-    try:
-        preds, labels, _ = run_predictor_on_test(predictor, device, max_samples=500)
-        ablation["Full model"]["r2"]  = r2_score(preds, labels)
-        ablation["Full model"]["mae"] = mae_score(preds, labels)
-    except Exception:
-        pass
-
-    names = list(ablation.keys())
-    r2s   = [ablation[n]["r2"]  for n in names]
-    maes  = [ablation[n]["mae"] for n in names]
-    x     = np.arange(len(names))
-    w     = 0.35
-
-    fig, ax1 = plt.subplots(figsize=COL2)
-    ax2 = ax1.twinx()
-
-    bars1 = ax1.bar(x - w / 2, r2s,  w, label="$R^2$",  color="#2563EB", alpha=0.85)
-    bars2 = ax2.bar(x + w / 2, maes, w, label="MAE", color="#E63946", alpha=0.85)
-
-    ax1.set_ylabel("$R^2$ Score", color="#2563EB")
-    ax2.set_ylabel("MAE",         color="#E63946")
-    ax1.tick_params(axis="y", colors="#2563EB")
-    ax2.tick_params(axis="y", colors="#E63946")
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(names, rotation=12, ha="right")
-    ax1.set_ylim(0.80, 1.02)
-    ax2.set_ylim(0.0,  0.045)
-
-    for bar, v in zip(bars1, r2s):
-        ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.002,
-                 f"{v:.4f}", ha="center", va="bottom", fontsize=8, color="#2563EB")
-    for bar, v in zip(bars2, maes):
-        ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.0005,
-                 f"{v:.3f}", ha="center", va="bottom", fontsize=8, color="#E63946")
-
-    lines1, lbls1 = ax1.get_legend_handles_labels()
-    lines2, lbls2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, lbls1 + lbls2, loc="lower right")
-    ax1.set_title("Ablation Study: Model Component Contribution")
-
-    out = PLOTS_DIR / "fig2_ablation_bars.pdf"
-    savefig(fig, out)
-    generated.append(out)
+def flatten_metrics(pred, true):
+    pred_arr = np.asarray(pred).reshape(-1)
+    true_arr = np.asarray(true).reshape(-1)
+    ss_res = np.sum((pred_arr - true_arr) ** 2)
+    ss_tot = np.sum((true_arr - np.mean(true_arr)) ** 2)
+    r2 = 1.0 - ss_res / max(ss_tot, 1e-12)
+    mae = float(np.mean(np.abs(pred_arr - true_arr)))
+    rmse = float(np.sqrt(np.mean((pred_arr - true_arr) ** 2)))
+    return float(r2), mae, rmse
 
 
-# ===========================================================================
-# FIG 3 — Per-step trajectory R²
-# ===========================================================================
+def load_artifacts():
+    cfg = load_cfg()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type != "cuda":
+        raise RuntimeError("scripts/generate_paper_outputs.py requires CUDA for inference.")
 
-def fig3_trajectory_horizon(generated):
-    print("[Fig 3] Trajectory horizon R²...")
-    steps = np.arange(1, 11)
-    r2s   = np.array(TRAJ_STEP_R2)
-    overall_r2 = 0.78
+    predictor, _, _ = load_pretrained_predictor(cfg, device_request="cuda")
+    trajectory, _ = load_pretrained_trajectory(cfg, predictor, device=device)
 
-    fig, ax = plt.subplots(figsize=COL1)
-    ax.plot(steps, r2s, "o-", color="#7B2D8B", lw=2, ms=6, label="Per-step $R^2$")
-    ax.axhline(overall_r2, ls="--", color="gray", lw=1.2, label=f"Overall $R^2={overall_r2}$")
-    ax.fill_between(steps, r2s, overall_r2, where=(r2s >= overall_r2),
-                    alpha=0.12, color="#7B2D8B", label="Above overall")
-    ax.fill_between(steps, r2s, overall_r2, where=(r2s < overall_r2),
-                    alpha=0.12, color="#E63946")
-    ax.set_xlabel("Prediction Horizon $k$")
-    ax.set_ylabel("$R^2$ Score")
-    ax.set_xticks(steps)
-    ax.set_ylim(0.68, 0.83)
-    ax.legend(loc="lower right")
-    ax.set_title("Trajectory Predictor: $R^2$ per Horizon Step")
+    test_ds = AgingDataset(root="./data", split="test", size=5000, cfg=cfg, seed=44)
+    loader = DataLoader(test_ds, batch_size=128, shuffle=False, **dataloader_kwargs(device))
+    num_nodes = int(test_ds[0].num_nodes)
+    graph_workloads = []
+    for idx in range(len(test_ds)):
+        graph_workloads.append(WORKLOAD_ORDER[int(test_ds[idx].workload_emb.argmax().item())])
+    node_workloads = np.repeat(np.array(graph_workloads, dtype=object), num_nodes)
 
-    out = PLOTS_DIR / "fig3_trajectory_horizon.pdf"
-    savefig(fig, out)
-    generated.append(out)
+    metrics = load_json(REPO_ROOT / "outputs" / "metrics.json")
+    training_history = load_json(REPO_ROOT / "outputs" / "training_history.json")
+    nsga_ppo_results = load_json(REPO_ROOT / "outputs" / "nsga_ppo_results.json")
+    pareto_objectives = load_json(REPO_ROOT / "outputs" / "pareto_objectives.json")
+    eval_df = pd.DataFrame(nsga_ppo_results["evaluation"])
+
+    return {
+        "cfg": cfg,
+        "device": device,
+        "predictor": predictor,
+        "trajectory": trajectory,
+        "test_ds": test_ds,
+        "test_loader": loader,
+        "num_nodes": num_nodes,
+        "graph_workloads": graph_workloads,
+        "node_workloads": node_workloads,
+        "metrics": metrics,
+        "training_history": training_history,
+        "results": nsga_ppo_results,
+        "pareto": pareto_objectives,
+        "eval_df": eval_df,
+    }
 
 
-# ===========================================================================
-# FIG 4 — Pareto front (aging vs latency per workload)
-# ===========================================================================
+def collect_test_predictions(artifacts):
+    predictor = artifacts["predictor"]
+    trajectory = artifacts["trajectory"]
+    device = artifacts["device"]
 
-def fig4_pareto_front(generated):
-    print("[Fig 4] Pareto front...")
+    predictor.eval()
+    trajectory.eval()
+    pred_nodes = []
+    true_nodes = []
+    pred_traj = []
+    true_traj = []
+    with torch.no_grad():
+        for batch in artifacts["test_loader"]:
+            batch = batch.to(device)
+            node_pred = predictor(batch.x, batch.edge_index, batch.edge_attr, batch.batch).view_as(batch.y)
+            traj_pred = trajectory(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
 
-    # Load JSON; fall back to eval table if missing
-    pareto_data: dict[str, list] = {}
-    try:
-        with open(PARETO_JSON) as f:
-            pareto_data = json.load(f)
-    except Exception:
-        pass
+            pred_nodes.append(node_pred.detach().cpu().numpy())
+            true_nodes.append(batch.y.detach().cpu().numpy())
+            pred_traj.append(traj_pred.detach().cpu().numpy())
+            true_traj.append(batch.y_trajectory.detach().cpu().numpy())
 
-    # Build initial-point dict from eval table
-    initials = {row[0]: (row[2], row[3] / 1e7) for row in EVAL_TABLE if row[1] == "Initial"}
+    predictor_pred = np.concatenate(pred_nodes, axis=0).reshape(-1)
+    predictor_true = np.concatenate(true_nodes, axis=0).reshape(-1)
+    trajectory_pred = np.concatenate(pred_traj, axis=0)
+    trajectory_true = np.concatenate(true_traj, axis=0)
 
-    fig, ax = plt.subplots(figsize=COL2)
+    return {
+        "predictor_pred": predictor_pred,
+        "predictor_true": predictor_true,
+        "trajectory_pred": trajectory_pred,
+        "trajectory_true": trajectory_true,
+    }
 
-    if pareto_data:
-        for wl, sols in pareto_data.items():
-            if not sols:
-                continue
-            aging   = [s["peak_aging"] for s in sols]
-            latency = [s["latency"]    for s in sols]
-            c = WORKLOAD_COLORS.get(wl, "black")
-            ax.plot(latency, aging, "o-", color=c, lw=1.5, ms=5, label=wl, alpha=0.85)
-            # Initial point
-            if wl in initials:
-                ia, il = initials[wl]
-                ax.plot(il, ia, "x", color=c, ms=9, mew=2)
-    else:
-        # Fallback: scatter from eval table
-        for wl in WORKLOAD_LIST:
-            rows = [(r[2], r[3] / 1e7) for r in EVAL_TABLE if r[0] == wl]
-            init_pt  = rows[0]
-            nsga_pt  = rows[1]
-            c = WORKLOAD_COLORS.get(wl, "black")
-            ax.annotate("", xy=nsga_pt[::-1], xytext=init_pt[::-1],
-                        arrowprops=dict(arrowstyle="->", color=c, lw=1.2))
-            ax.scatter([init_pt[1]], [init_pt[0]], marker="x", c=c, s=60, zorder=5)
-            ax.scatter([nsga_pt[1]], [nsga_pt[0]], marker="o", c=c, s=40, zorder=5, label=wl)
 
-    # Legend entries for markers
-    from matplotlib.lines import Line2D
-    legend_extra = [
-        Line2D([0], [0], marker="o", color="gray", ls="-", label="Pareto front", ms=5),
-        Line2D([0], [0], marker="x", color="gray", ls="", label="Initial (all-to-one)", ms=7, mew=2),
+def evaluate_ablation_models(artifacts):
+    device = artifacts["device"]
+    state_dict = artifacts["predictor"].state_dict()
+    cfg = artifacts["cfg"]
+    model_cfg = cfg.model
+    configs = [
+        ("GCN only", ("gcn",)),
+        ("GCN+GAT", ("gcn", "gat")),
+        ("GCN+Trans", ("gcn", "transformer")),
+        ("Full model", ("gcn", "gat", "transformer")),
     ]
-    handles, lbls = ax.get_legend_handles_labels()
-    ax.legend(handles + legend_extra, lbls + [h.get_label() for h in legend_extra],
-              fontsize=8, ncol=2, loc="upper right")
+    rows = []
+    for name, components in configs:
+        model = HybridGNNTransformer(
+            node_feature_dim=8,
+            hidden_dim=int(model_cfg.hidden_dim),
+            gat_heads=int(model_cfg.gat_heads),
+            transformer_layers=int(model_cfg.transformer_layers),
+            transformer_heads=int(model_cfg.transformer_heads),
+            seq_len=1,
+            components=components,
+        ).to(device)
+        model.load_state_dict(state_dict, strict=True)
+        model.eval()
 
-    ax.set_xlabel("Latency (×10⁷ cycles)")
-    ax.set_ylabel("Peak Aging Score")
-    ax.set_title("NSGA-II Pareto Front: Aging vs Latency")
-
-    out = PLOTS_DIR / "fig4_pareto_front.pdf"
-    savefig(fig, out)
-    generated.append(out)
-
-
-# ===========================================================================
-# FIG 5 — PPO learning curve
-# ===========================================================================
-
-def fig5_ppo_reward(generated):
-    print("[Fig 5] PPO reward curve...")
-    iters   = np.arange(1, len(PPO_REWARDS) + 1)
-    rewards = np.array(PPO_REWARDS)
-    smooth  = moving_average(rewards, 5)
-
-    fig, ax = plt.subplots(figsize=COL1)
-    ax.plot(iters, rewards, color=COLOR_PPO, alpha=0.35, lw=1.2, label="Mean reward")
-    ax.plot(iters, smooth,  color=COLOR_PPO, lw=2.2, label="Smoothed (w=5)")
-    ax.axhline(0.0, ls="--", color="gray", lw=1.0, label="y = 0")
-    ax.fill_between(iters, rewards, 0, where=(rewards > 0),
-                    alpha=0.12, color=COLOR_PPO)
-    ax.fill_between(iters, rewards, 0, where=(rewards < 0),
-                    alpha=0.12, color="#E63946")
-    ax.set_xlabel("PPO Iteration")
-    ax.set_ylabel("Mean Episode Reward")
-    ax.set_xlim(1, len(iters))
-    ax.legend(loc="lower right")
-    ax.set_title("PPO Training Curve")
-
-    out = PLOTS_DIR / "fig5_ppo_reward.pdf"
-    savefig(fig, out)
-    generated.append(out)
-
-
-# ===========================================================================
-# FIG 6 — Node-level aging heatmap (GT vs Predicted)
-# ===========================================================================
-
-def fig6_aging_heatmap(predictor, device, generated):
-    print("[Fig 6] Aging heatmap...")
-    try:
-        ds = PackedTestDataset(TEST_PT)
-        # Find first sample index for each workload
-        wl_to_idx = {}
-        for i, wi in enumerate(ds.wl_idx):
-            wl = WORKLOAD_LIST[wi]
-            if wl not in wl_to_idx:
-                wl_to_idx[wl] = i
-            if len(wl_to_idx) == len(WORKLOAD_LIST):
-                break
-
-        from torch_geometric.data import Data, Batch
-        samples = []
-        wl_order = []
-        for wl in WORKLOAD_LIST:
-            idx = wl_to_idx.get(wl)
-            if idx is None:
-                continue
-            item = ds[idx]
-            samples.append(item)
-            wl_order.append(wl)
-
-        batch = Batch.from_data_list(samples).to(device)
+        preds = []
+        labels = []
         with torch.no_grad():
-            pred = predictor(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
+            for batch in artifacts["test_loader"]:
+                batch = batch.to(device)
+                pred = model(batch.x, batch.edge_index, batch.edge_attr, batch.batch).view_as(batch.y)
+                preds.append(pred.detach().cpu().numpy())
+                labels.append(batch.y.detach().cpu().numpy())
 
-        pred_np  = pred.view(-1).cpu().numpy().reshape(len(wl_order), NODES_PER_GRAPH)
-        label_np = batch.y.view(-1).cpu().numpy().reshape(len(wl_order), NODES_PER_GRAPH)
-        use_real = True
-    except Exception as e:
-        print(f"  Warning: heatmap inference failed ({e}), using synthetic data")
-        rng = np.random.default_rng(1)
-        label_np = rng.uniform(0, 0.5, (5, NODES_PER_GRAPH)).astype(np.float32)
-        pred_np  = np.clip(label_np + rng.normal(0, 0.01, label_np.shape), 0, 1)
-        wl_order = WORKLOAD_LIST
-        use_real = False
+        pred_arr = np.concatenate(preds, axis=0)
+        label_arr = np.concatenate(labels, axis=0)
+        r2, mae, _ = flatten_metrics(pred_arr, label_arr)
+        rows.append({"Config": name, "R2": r2, "MAE": mae})
+    return pd.DataFrame(rows)
 
-    vmin = min(pred_np.min(), label_np.min())
-    vmax = max(pred_np.max(), label_np.max())
-    norm = Normalize(vmin=vmin, vmax=vmax)
-    cmap = "hot_r"
 
-    n_wl = len(wl_order)
-    fig, axes = plt.subplots(n_wl, 2, figsize=(10, 1.5 * n_wl + 0.5))
-    if n_wl == 1:
-        axes = axes[np.newaxis, :]
+def per_step_r2(trajectory_pred: np.ndarray, trajectory_true: np.ndarray) -> list[float]:
+    values = []
+    for step in range(trajectory_true.shape[1]):
+        pred = trajectory_pred[:, step]
+        true = trajectory_true[:, step]
+        ss_res = np.sum((pred - true) ** 2)
+        ss_tot = np.sum((true - np.mean(true)) ** 2)
+        values.append(float(1.0 - ss_res / max(ss_tot, 1e-12)))
+    return values
 
-    for row_i, wl in enumerate(wl_order):
-        for col_i, (data, title) in enumerate([
-            (label_np[row_i], "Ground Truth"),
-            (pred_np[row_i],  "Predicted"),
-        ]):
-            ax = axes[row_i, col_i]
-            im = ax.imshow(
-                data.reshape(4, 7),   # 28 = 4 rows × 7 cols (display grid)
-                norm=norm, cmap=cmap, aspect="auto",
+
+def workload_sample_indices(graph_workloads: list[str]) -> dict[str, int]:
+    picked = {}
+    for idx, workload in enumerate(graph_workloads):
+        if workload not in picked:
+            picked[workload] = idx
+        if len(picked) == len(WORKLOAD_ORDER):
+            break
+    return picked
+
+
+def slice_graph_values(values: np.ndarray, graph_idx: int, num_nodes: int) -> np.ndarray:
+    start = graph_idx * num_nodes
+    end = start + num_nodes
+    return values[start:end]
+
+
+def build_positions(acc_graph: AcceleratorGraph) -> dict[int, tuple[float, float]]:
+    positions = {}
+    mac_side = int(math.ceil(math.sqrt(acc_graph.mac_clusters)))
+    for node_id, info in acc_graph.node_info.items():
+        node_type = info["type"]
+        local_idx = int(info["local_idx"])
+        if node_type == "mac":
+            row = local_idx // mac_side
+            col = local_idx % mac_side
+            positions[node_id] = (float(col), float(-row))
+        elif node_type == "sram":
+            positions[node_id] = (float(local_idx) * 0.9 - 0.5, 1.8)
+        else:
+            positions[node_id] = (float(local_idx) * 1.4 - 0.5, -mac_side - 1.0)
+    return positions
+
+
+def method_metric_table(eval_df: pd.DataFrame, metric: str) -> pd.DataFrame:
+    table = eval_df.pivot(index="Workload", columns="Method", values=metric).reset_index()
+    return table.set_index("Workload").loc[WORKLOAD_ORDER].reset_index()
+
+
+def fig1_prediction_scatter(predictions, generated):
+    print("[Fig 1] Prediction scatter")
+    pred = predictions["predictor_pred"]
+    true = predictions["predictor_true"]
+    r2, mae, _ = flatten_metrics(pred, true)
+
+    fig, ax = plt.subplots(figsize=(5.2, 4.6))
+    hb = ax.hexbin(true, pred, gridsize=60, cmap="YlOrRd", mincnt=1)
+    fig.colorbar(hb, ax=ax, label="Count")
+    lo = min(true.min(), pred.min())
+    hi = max(true.max(), pred.max())
+    ax.plot([lo, hi], [lo, hi], linestyle="--", color="black", linewidth=1.2)
+    ax.set_xlabel("Ground-truth aging score")
+    ax.set_ylabel("Predicted aging score")
+    ax.text(
+        0.04,
+        0.96,
+        f"$R^2$ = {r2:.4f}\nMAE = {mae:.4f}",
+        transform=ax.transAxes,
+        va="top",
+        bbox={"facecolor": "white", "edgecolor": "0.7", "alpha": 0.9},
+    )
+    savefig(fig, "fig1_prediction_scatter.pdf", generated)
+
+
+def fig2_ablation_bars(ablation_df: pd.DataFrame, generated):
+    print("[Fig 2] Ablation bars")
+    x = np.arange(len(ablation_df))
+    width = 0.36
+
+    fig, ax1 = plt.subplots(figsize=(7.2, 4.6))
+    ax2 = ax1.twinx()
+    bars_r2 = ax1.bar(x - width / 2, ablation_df["R2"], width, color=COLOR_NSGA, label="$R^2$")
+    bars_mae = ax2.bar(x + width / 2, ablation_df["MAE"], width, color="indianred", label="MAE")
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(ablation_df["Config"], rotation=15, ha="right")
+    ax1.set_ylabel("$R^2$")
+    ax2.set_ylabel("MAE")
+    ax1.set_ylim(0.0, 1.02)
+    ax2.set_ylim(0.0, max(ablation_df["MAE"]) * 1.25)
+    for bar, value in zip(bars_r2, ablation_df["R2"]):
+        ax1.text(bar.get_x() + bar.get_width() / 2, value + 0.01, f"{value:.3f}", ha="center", va="bottom", fontsize=9)
+    for bar, value in zip(bars_mae, ablation_df["MAE"]):
+        ax2.text(bar.get_x() + bar.get_width() / 2, value + 0.001, f"{value:.3f}", ha="center", va="bottom", fontsize=9)
+    handles1, labels1 = ax1.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(handles1 + handles2, labels1 + labels2, loc="upper left")
+    savefig(fig, "fig2_ablation_bars.pdf", generated)
+
+
+def fig3_trajectory_horizon(step_r2: list[float], overall_r2: float, generated):
+    print("[Fig 3] Trajectory horizon")
+    steps = np.arange(1, len(step_r2) + 1)
+    step_r2_arr = np.array(step_r2)
+
+    fig, ax = plt.subplots(figsize=(5.4, 4.4))
+    ax.plot(steps, step_r2_arr, marker="o", color="purple", linewidth=2.0)
+    ax.axhline(overall_r2, linestyle="--", color="gray", linewidth=1.2)
+    ax.fill_between(steps, step_r2_arr, overall_r2, where=step_r2_arr < overall_r2, color="lightgray", alpha=0.4)
+    ax.set_xlabel("Prediction horizon $k$")
+    ax.set_ylabel("$R^2$ score")
+    ax.set_xticks(steps)
+    ax.set_ylim(min(step_r2_arr.min(), overall_r2) - 0.05, 1.0)
+    savefig(fig, "fig3_trajectory_horizon.pdf", generated)
+
+
+def fig4_pareto_front(eval_df: pd.DataFrame, pareto: dict, generated):
+    print("[Fig 4] Pareto front")
+    fig, ax = plt.subplots(figsize=(7.6, 5.0))
+
+    initials = eval_df[eval_df["Method"] == "Initial"].set_index("Workload")
+    for workload in WORKLOAD_ORDER:
+        color = WORKLOAD_COLORS[workload]
+        points = pareto.get(workload, [])
+        if points:
+            ax.scatter(
+                [p["latency_cycles"] for p in points],
+                [p["peak_aging"] for p in points],
+                s=38,
+                color=color,
+                alpha=0.8,
+                label=workload,
             )
-            if row_i == 0:
-                ax.set_title(title, fontsize=11)
-            ax.set_yticks([])
+        init_row = initials.loc[workload]
+        ax.scatter(init_row["Latency Cycles"], init_row["Peak Aging"], marker="x", s=80, linewidths=2.0, color=color)
+    ax.set_xlabel("Latency (cycles)")
+    ax.set_ylabel("Peak aging score")
+    ax.legend(loc="best", ncol=2, fontsize=9)
+    savefig(fig, "fig4_pareto_front.pdf", generated)
+
+
+def fig5_ppo_reward(rewards: list[float], generated):
+    print("[Fig 5] PPO reward")
+    reward_arr = np.array(rewards, dtype=np.float64)
+    smoothed = moving_average(reward_arr, 5)
+    x = np.arange(1, len(reward_arr) + 1)
+
+    fig, ax = plt.subplots(figsize=(6.2, 4.4))
+    ax.plot(x, reward_arr, color=COLOR_PPO, alpha=0.35, linewidth=1.2, label="Raw reward")
+    ax.plot(x, smoothed, color=COLOR_PPO, linewidth=2.2, label="Smoothed (w=5)")
+    ax.axhline(0.0, linestyle="--", color="black", linewidth=1.0)
+    ax.annotate(f"start = {reward_arr[0]:+.3f}", xy=(1, reward_arr[0]), xytext=(4, reward_arr[0] + 0.1),
+                arrowprops={"arrowstyle": "->", "color": "0.3"}, fontsize=9)
+    ax.annotate(f"end = {reward_arr[-1]:+.3f}", xy=(x[-1], reward_arr[-1]), xytext=(max(1, x[-1] - 16), reward_arr[-1] + 0.1),
+                arrowprops={"arrowstyle": "->", "color": "0.3"}, fontsize=9)
+    ax.set_xlabel("PPO iteration")
+    ax.set_ylabel("Mean episode reward")
+    ax.legend(loc="best")
+    savefig(fig, "fig5_ppo_reward.pdf", generated)
+
+
+def fig6_aging_heatmap(predictions, artifacts, generated):
+    print("[Fig 6] Aging heatmap")
+    sample_idx = workload_sample_indices(artifacts["graph_workloads"])
+    num_nodes = artifacts["num_nodes"]
+
+    rows = []
+    for workload in WORKLOAD_ORDER:
+        idx = sample_idx[workload]
+        rows.append((
+            workload,
+            slice_graph_values(predictions["predictor_true"], idx, num_nodes),
+            slice_graph_values(predictions["predictor_pred"], idx, num_nodes),
+        ))
+
+    values = np.concatenate([item[1] for item in rows] + [item[2] for item in rows])
+    norm = Normalize(vmin=float(values.min()), vmax=float(values.max()))
+    fig, axes = plt.subplots(len(rows), 2, figsize=(7.2, 1.4 * len(rows) + 0.8))
+    for row_idx, (workload, truth, pred) in enumerate(rows):
+        for col_idx, matrix in enumerate([truth, pred]):
+            ax = axes[row_idx, col_idx]
+            ax.imshow(matrix.reshape(4, 7), cmap="hot", norm=norm, aspect="auto")
             ax.set_xticks([])
-            ax.set_ylabel(wl if col_i == 0 else "", fontsize=8, rotation=0,
-                          labelpad=55, va="center")
-
-    fig.subplots_adjust(right=0.88, hspace=0.15, wspace=0.05)
-    cax = fig.add_axes([0.90, 0.15, 0.02, 0.70])
-    fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), cax=cax, label="Aging Score")
-
-    out = PLOTS_DIR / "fig6_aging_heatmap.pdf"
-    savefig(fig, out)
-    generated.append(out)
+            ax.set_yticks([])
+            if row_idx == 0:
+                ax.set_title("Ground truth" if col_idx == 0 else "Predicted")
+            if col_idx == 0:
+                ax.set_ylabel(workload, rotation=0, labelpad=48, va="center")
+    savefig(fig, "fig6_aging_heatmap.pdf", generated)
 
 
-# ===========================================================================
-# FIG 7 — Grouped bar: Initial vs NSGA-II vs PPO per workload
-# ===========================================================================
+def fig7_method_comparison(eval_df: pd.DataFrame, generated):
+    print("[Fig 7] Method comparison")
+    table = method_metric_table(eval_df, "Peak Aging")
+    x = np.arange(len(table))
+    width = 0.24
+    fig, ax = plt.subplots(figsize=(8.2, 4.8))
 
-def fig7_method_comparison(generated):
-    print("[Fig 7] Method comparison bars...")
+    initial_vals = table["Initial"].to_numpy()
+    nsga_vals = table["NSGA-II"].to_numpy()
+    ppo_vals = table["PPO"].to_numpy()
 
-    workloads = [w for w in WORKLOAD_LIST]
-    methods   = ["Initial", "NSGA-II", "PPO"]
-    colors    = [COLOR_INITIAL, COLOR_NSGA, COLOR_PPO]
+    bars_init = ax.bar(x - width, initial_vals, width, color=COLOR_INITIAL, label="Initial")
+    bars_nsga = ax.bar(x, nsga_vals, width, color=COLOR_NSGA, label="NSGA-II")
+    bars_ppo = ax.bar(x + width, ppo_vals, width, color=COLOR_PPO, label="PPO")
 
-    data: dict[str, dict[str, float]] = {wl: {} for wl in workloads}
-    for row in EVAL_TABLE:
-        wl, method, aging, lat, eng, ttf = row
-        if wl in data:
-            data[wl][method] = aging
+    for bar, init, val in zip(bars_nsga, initial_vals, nsga_vals):
+        reduction = 100.0 * (init - val) / max(init, 1e-12)
+        ax.text(bar.get_x() + bar.get_width() / 2, val + 0.01, f"-{reduction:.1f}%", ha="center", va="bottom", fontsize=8)
+    for bar, init, val in zip(bars_ppo, initial_vals, ppo_vals):
+        reduction = 100.0 * (init - val) / max(init, 1e-12)
+        ax.text(bar.get_x() + bar.get_width() / 2, val + 0.01, f"-{reduction:.1f}%", ha="center", va="bottom", fontsize=8)
 
-    n = len(workloads)
-    x = np.arange(n)
-    w = 0.25
-
-    fig, ax = plt.subplots(figsize=COL2)
-    for mi, (method, color) in enumerate(zip(methods, colors)):
-        vals   = [data[wl].get(method, 0) for wl in workloads]
-        offset = (mi - 1) * w
-        bars   = ax.bar(x + offset, vals, w, label=method, color=color, alpha=0.88, edgecolor="white")
-        for bar, v in zip(bars, vals):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
-                    f"{v:.2f}", ha="center", va="bottom", fontsize=7.5)
-
-    ax.set_ylabel("Peak Aging Score")
+    ax.set_ylabel("Peak aging score")
     ax.set_xticks(x)
-    ax.set_xticklabels(workloads, rotation=12, ha="right")
-    ax.set_ylim(0, 0.60)
-    ax.legend(loc="upper right")
-    ax.set_title("Peak Aging Score: Initial vs NSGA-II vs PPO")
+    ax.set_xticklabels(table["Workload"], rotation=15, ha="right")
+    ax.legend(loc="best")
+    savefig(fig, "fig7_method_comparison.pdf", generated)
 
-    out = PLOTS_DIR / "fig7_method_comparison.pdf"
-    savefig(fig, out)
-    generated.append(out)
-
-
-# ===========================================================================
-# FIG 8 — Physics aging curves (NBTI, HCI, TDDB)
-# ===========================================================================
 
 def fig8_physics_curves(generated):
-    print("[Fig 8] Physics aging curves...")
-    t_h   = np.linspace(0, 500, 500)          # hours
-    t_s   = t_h * 3600.0                       # seconds
-    acts  = [0.3, 0.6, 0.9]
-    act_labels = ["Activity = 0.3", "Activity = 0.6", "Activity = 0.9"]
-    linestyles = ["-", "--", ":"]
+    print("[Fig 8] Physics curves")
+    hours = np.linspace(0.0, 500.0, 500)
+    acts = [0.3, 0.6, 0.9]
+    A, n_exp = 0.005, 0.25
+    B, m_exp = 0.0001, 0.5
+    eta, beta = 200.0, 2.5
 
-    # Model parameters
-    A, n_exp = 0.005, 0.25          # NBTI
-    B, m     = 0.0001, 0.5          # HCI
-    beta_tddb, eta = 2.5, 10.0      # TDDB  (Weibull: 1 - exp(-(t/eta)^beta))
+    fig, axes = plt.subplots(1, 3, figsize=(11.2, 3.4))
+    for act in acts:
+        axes[0].plot(hours, A * np.power(np.clip(act * hours, 1e-9, None), n_exp), label=f"act={act:.1f}")
+        axes[1].plot(hours, B * np.power(act, m_exp) * np.sqrt(hours), label=f"act={act:.1f}")
+        axes[2].plot(hours, 1.0 - np.exp(-np.power(hours / eta, beta)), label=f"act={act:.1f}")
 
-    fig, axes = plt.subplots(1, 3, figsize=(11, 3.2))
-    titles = ["NBTI", "HCI", "TDDB"]
-    cmaps  = ["Blues", "Oranges", "Greens"]
-
-    for col, (title, cmap_name) in enumerate(zip(titles, cmaps)):
-        ax = axes[col]
-        cmap = plt.get_cmap(cmap_name)
-        for ai, (act, ls) in enumerate(zip(acts, linestyles)):
-            color = cmap(0.4 + 0.25 * ai)
-            if title == "NBTI":
-                effective = np.clip(act * t_s, 1e-12, None)
-                y = A * np.power(effective, n_exp)
-                y = np.clip(y / 0.2, 0, 1)   # normalise same as AgingLabelGenerator
-            elif title == "HCI":
-                current_density = act * act   # sw_act * util proxy
-                y = B * np.power(current_density + 1e-12, m) * np.sqrt(np.clip(t_s, 0, None))
-                y = np.clip(y / 0.1, 0, 1)
-            else:  # TDDB Weibull
-                t_norm = np.clip(t_h / eta, 1e-15, None)
-                y = 1.0 - np.exp(-(t_norm ** beta_tddb))
-
-            ax.plot(t_h, y, color=color, lw=1.8, ls=ls, label=act_labels[ai])
-
+    axes[0].set_title("NBTI")
+    axes[1].set_title("HCI")
+    axes[2].set_title("TDDB")
+    for ax in axes:
         ax.set_xlabel("Time (hours)")
-        ax.set_ylabel("Normalised Degradation")
-        ax.set_title(title)
-        ax.set_ylim(-0.02, 1.05)
-        ax.set_xlim(0, 500)
-        ax.legend(fontsize=8, loc="lower right" if title != "TDDB" else "upper left")
-
-    plt.tight_layout()
-    out = PLOTS_DIR / "fig8_physics_curves.pdf"
-    savefig(fig, out)
-    generated.append(out)
+        ax.set_ylabel("Degradation")
+        ax.legend(loc="best", fontsize=8)
+    savefig(fig, "fig8_physics_curves.pdf", generated)
 
 
-# ===========================================================================
-# TABLE 1 — Prediction accuracy
-# ===========================================================================
+def fig9_lifetime_per_workload(eval_df: pd.DataFrame, generated):
+    print("[Fig 9] Lifetime per workload")
+    table = method_metric_table(eval_df, "TTF (Yrs)")
+    x = np.arange(len(table))
+    width = 0.24
+    fig, ax = plt.subplots(figsize=(8.2, 4.8))
+    initial_vals = table["Initial"].to_numpy()
+    nsga_vals = table["NSGA-II"].to_numpy()
+    ppo_vals = table["PPO"].to_numpy()
 
-def table1_prediction_accuracy(preds, labels, generated):
-    print("[Table 1] Prediction accuracy...")
-    r2   = r2_score(preds, labels)
-    mae  = mae_score(preds, labels)
-    rmse = rmse_score(preds, labels)
+    bars_init = ax.bar(x - width, initial_vals, width, color=COLOR_INITIAL, label="Initial")
+    bars_nsga = ax.bar(x, nsga_vals, width, color=COLOR_NSGA, label="NSGA-II")
+    bars_ppo = ax.bar(x + width, ppo_vals, width, color=COLOR_PPO, label="PPO")
 
-    rows = [
-        ("Aging Predictor (GNN)",     f"{r2:.4f}",  f"{mae:.4f}", f"{rmse:.4f}", "k=0 (current)"),
-        ("Trajectory Predictor (RNN)", "0.7800",    "0.0720",     "N/A",          "k=10 (horizon)"),
-    ]
-    header = ["Method", "$R^2$", "MAE", "RMSE", "Horizon"]
+    for bar, init, val in zip(bars_nsga, initial_vals, nsga_vals):
+        improvement = 100.0 * (val - init) / max(init, 1e-12)
+        ax.text(bar.get_x() + bar.get_width() / 2, val + 0.01, f"+{improvement:.1f}%", ha="center", va="bottom", fontsize=8)
+    for bar, init, val in zip(bars_ppo, initial_vals, ppo_vals):
+        improvement = 100.0 * (val - init) / max(init, 1e-12)
+        ax.text(bar.get_x() + bar.get_width() / 2, val + 0.01, f"+{improvement:.1f}%", ha="center", va="bottom", fontsize=8)
 
-    # CSV
-    df = pd.DataFrame(rows, columns=header)
-    csv_path = TABLES_DIR / "table1_prediction_accuracy.csv"
-    df.to_csv(csv_path, index=False)
-    generated.append(csv_path)
-
-    # LaTeX
-    tex_lines = [
-        r"\begin{table}[h]",
-        r"\centering",
-        r"\caption{Prediction Accuracy of the Aging and Trajectory Predictors}",
-        r"\label{tab:prediction_accuracy}",
-        r"\begin{tabular}{lcccc}",
-        r"\toprule",
-        " & ".join(header) + r" \\",
-        r"\midrule",
-    ]
-    for row in rows:
-        tex_lines.append(" & ".join(row) + r" \\")
-    tex_lines += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
-
-    tex_path = TABLES_DIR / "table1_prediction_accuracy.tex"
-    tex_path.write_text("\n".join(tex_lines))
-    generated.append(tex_path)
+    ax.set_ylabel("TTF (years)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(table["Workload"], rotation=15, ha="right")
+    ax.legend(loc="best")
+    savefig(fig, "fig9_lifetime_per_workload.pdf", generated)
 
 
-# ===========================================================================
-# TABLE 2 — Method comparison (eval table as LaTeX)
-# ===========================================================================
+def fig10_latency_reduction(eval_df: pd.DataFrame, generated):
+    print("[Fig 10] Latency reduction")
+    table = method_metric_table(eval_df, "Latency Cycles")
+    x = np.arange(len(table))
+    width = 0.32
+    fig, ax = plt.subplots(figsize=(8.2, 4.8))
+    init_vals = table["Initial"].to_numpy()
+    nsga_vals = table["NSGA-II"].to_numpy()
+    bars_init = ax.bar(x - width / 2, init_vals, width, color=COLOR_INITIAL, label="Initial")
+    bars_nsga = ax.bar(x + width / 2, nsga_vals, width, color=COLOR_NSGA, label="NSGA-II")
 
-def table2_method_comparison(generated):
-    print("[Table 2] Method comparison table...")
-    df = pd.DataFrame(
-        EVAL_TABLE,
-        columns=["Workload", "Method", "Peak Aging", "Latency Cycles", "Energy (pJ)", "TTF (Yrs)"],
-    )
-    csv_path = TABLES_DIR / "table2_method_comparison.csv"
-    df.to_csv(csv_path, index=False)
-    generated.append(csv_path)
+    for bar, init, val in zip(bars_nsga, init_vals, nsga_vals):
+        reduction = 100.0 * (init - val) / max(init, 1e-12)
+        ax.text(bar.get_x() + bar.get_width() / 2, val + max(nsga_vals) * 0.01, f"-{reduction:.1f}%", ha="center", va="bottom", fontsize=8)
 
-    # LaTeX
-    tex_lines = [
-        r"\begin{table}[h]",
-        r"\centering",
-        r"\caption{Comparison of Initial Mapping, NSGA-II, and PPO Across Workloads}",
-        r"\label{tab:method_comparison}",
-        r"\begin{tabular}{llcccr}",
-        r"\toprule",
-        r"Workload & Method & Peak Aging & Latency (cycles) & Energy (pJ) & TTF (yrs) \\",
-        r"\midrule",
-    ]
-    prev_wl = None
-    for row in EVAL_TABLE:
-        wl, method, aging, lat, eng, ttf = row
-        wl_cell = wl if wl != prev_wl else ""
-        prev_wl = wl
-        tex_lines.append(
-            f"{wl_cell} & {method} & {aging:.4f} & {lat:.0f} & {eng:.3e} & {ttf:.4f} \\\\"
+    ax.set_ylabel("Latency (cycles)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(table["Workload"], rotation=15, ha="right")
+    ax.legend(loc="best")
+    savefig(fig, "fig10_latency_reduction.pdf", generated)
+
+
+def fig11_lifetime_summary(eval_df: pd.DataFrame, generated):
+    print("[Fig 11] Lifetime summary")
+    grouped = eval_df.groupby("Method")["TTF (Yrs)"].mean()
+    labels = ["Static", "NSGA-II Best", "PPO Policy"]
+    values = np.array([grouped["Initial"], grouped["NSGA-II"], grouped["PPO"]], dtype=np.float64)
+    base = values[0]
+
+    fig, ax = plt.subplots(figsize=(6.0, 4.4))
+    bars = ax.bar(labels, values, color=[COLOR_INITIAL, COLOR_NSGA, COLOR_PPO])
+    for bar, val in zip(bars[1:], values[1:]):
+        improvement = 100.0 * (val - base) / max(base, 1e-12)
+        ax.text(bar.get_x() + bar.get_width() / 2, val + values.max() * 0.02, f"+{improvement:.1f}%", ha="center", va="bottom")
+    ax.set_ylabel("Mean TTF (years)")
+    savefig(fig, "fig11_lifetime_summary.pdf", generated)
+
+
+def fig12_pareto_3d(eval_df: pd.DataFrame, pareto: dict, generated):
+    print("[Fig 12] Pareto 3D")
+    fig = plt.figure(figsize=(8.0, 6.0))
+    ax = fig.add_subplot(111, projection="3d")
+
+    initials = eval_df[eval_df["Method"] == "Initial"].set_index("Workload")
+    for workload in WORKLOAD_ORDER:
+        color = WORKLOAD_COLORS[workload]
+        points = pareto.get(workload, [])
+        if points:
+            ax.scatter(
+                [p["latency_cycles"] for p in points],
+                [p["energy_pj"] for p in points],
+                [p["peak_aging"] for p in points],
+                color=color,
+                s=26,
+                alpha=0.85,
+            )
+        init = initials.loc[workload]
+        ax.scatter(
+            [init["Latency Cycles"]],
+            [init["Energy (pJ)"]],
+            [init["Peak Aging"]],
+            color=color,
+            marker="x",
+            s=80,
         )
-        if method == "PPO" and wl != EVAL_TABLE[-1][0]:
-            tex_lines.append(r"\midrule")
-    tex_lines += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
-
-    tex_path = TABLES_DIR / "table2_method_comparison.tex"
-    tex_path.write_text("\n".join(tex_lines))
-    generated.append(tex_path)
+    ax.set_xlabel("Latency")
+    ax.set_ylabel("Energy")
+    ax.set_zlabel("Peak aging")
+    savefig(fig, "fig12_pareto_3d.pdf", generated)
 
 
-# ===========================================================================
-# TABLE 3 — Per-workload predictor accuracy
-# ===========================================================================
+def fig13_training_convergence(training_history: dict, generated):
+    print("[Fig 13] Training convergence")
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.2))
 
-def table3_per_workload(predictor, device, generated):
-    print("[Table 3] Per-workload accuracy...")
-    try:
-        preds, labels, wl_per_node = run_predictor_on_test(predictor, device, max_samples=2000)
-        rows = []
-        for wl in WORKLOAD_LIST:
-            mask = wl_per_node == wl
-            if mask.sum() == 0:
-                continue
-            p, l = preds[mask], labels[mask]
-            rows.append((wl, r2_score(p, l), mae_score(p, l), rmse_score(p, l), int(mask.sum())))
-    except Exception as e:
-        print(f"  Warning: inference failed ({e}), using synthetic per-workload stats")
-        rng = np.random.default_rng(2)
-        rows = []
-        base_r2 = [0.991, 0.994, 0.993, 0.992, 0.995]
-        base_mae = [0.006, 0.004, 0.005, 0.005, 0.004]
-        for i, wl in enumerate(WORKLOAD_LIST):
-            rows.append((wl, base_r2[i], base_mae[i], base_mae[i] * 1.41, 560))
+    pred_hist = training_history["predictor"]
+    traj_hist = training_history["trajectory"]
 
-    header = ["Workload", "$R^2$", "MAE", "RMSE", "Nodes"]
-    df_rows = [(r[0], f"{r[1]:.4f}", f"{r[2]:.4f}", f"{r[3]:.4f}", str(r[4])) for r in rows]
-    df = pd.DataFrame(df_rows, columns=header)
-    csv_path = TABLES_DIR / "table3_per_workload.csv"
-    df.to_csv(csv_path, index=False)
-    generated.append(csv_path)
+    axes[0].plot(pred_hist["epoch"], pred_hist["train_loss"], color=COLOR_NSGA, label="Predictor train")
+    axes[0].plot(pred_hist["epoch"], pred_hist["val_loss"], color=COLOR_NSGA, linestyle="--", label="Predictor val")
+    axes[0].plot(traj_hist["epoch"], traj_hist["train_loss"], color=COLOR_PPO, label="Trajectory train")
+    axes[0].plot(traj_hist["epoch"], traj_hist["val_loss"], color=COLOR_PPO, linestyle="--", label="Trajectory val")
+    axes[0].axvline(pred_hist["best_epoch"], color=COLOR_NSGA, linestyle=":", linewidth=1.2)
+    axes[0].axvline(traj_hist["best_epoch"], color=COLOR_PPO, linestyle=":", linewidth=1.2)
+    axes[0].set_yscale("log")
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("MSE loss")
+    axes[0].legend(loc="best", fontsize=8)
 
-    tex_lines = [
-        r"\begin{table}[h]",
-        r"\centering",
-        r"\caption{Per-Workload Aging Predictor Accuracy on Test Set}",
-        r"\label{tab:per_workload}",
-        r"\begin{tabular}{lcccc}",
-        r"\toprule",
-        " & ".join(header) + r" \\",
-        r"\midrule",
-    ]
-    for r in df_rows:
-        tex_lines.append(" & ".join(r) + r" \\")
-    tex_lines += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
-
-    tex_path = TABLES_DIR / "table3_per_workload.tex"
-    tex_path.write_text("\n".join(tex_lines))
-    generated.append(tex_path)
+    axes[1].plot(pred_hist["epoch"], pred_hist["val_r2"], color=COLOR_NSGA, label="Predictor val $R^2$")
+    axes[1].plot(traj_hist["epoch"], traj_hist["val_r2"], color=COLOR_PPO, label="Trajectory val $R^2$")
+    axes[1].axvline(pred_hist["best_epoch"], color=COLOR_NSGA, linestyle=":", linewidth=1.2)
+    axes[1].axvline(traj_hist["best_epoch"], color=COLOR_PPO, linestyle=":", linewidth=1.2)
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("Validation $R^2$")
+    axes[1].legend(loc="best", fontsize=8)
+    savefig(fig, "fig13_training_convergence.pdf", generated)
 
 
-# ===========================================================================
-# Main
-# ===========================================================================
+def fig14_trajectory_pred_vs_actual(predictions, generated):
+    print("[Fig 14] Trajectory pred vs actual")
+    traj_pred = predictions["trajectory_pred"]
+    traj_true = predictions["trajectory_true"]
+    fig, axes = plt.subplots(1, 2, figsize=(9.0, 4.0))
+    for ax, step in zip(axes, [0, 9]):
+        pred = traj_pred[:, step]
+        true = traj_true[:, step]
+        lo = min(pred.min(), true.min())
+        hi = max(pred.max(), true.max())
+        ax.scatter(true, pred, s=5, alpha=0.25, color=COLOR_NSGA)
+        ax.plot([lo, hi], [lo, hi], linestyle="--", color="black", linewidth=1.0)
+        ax.set_xlabel("Actual")
+        ax.set_ylabel("Predicted")
+        ax.set_title(f"Step {step + 1}")
+    savefig(fig, "fig14_trajectory_pred_vs_actual.pdf", generated)
+
+
+def fig15_aging_graph(predictions, artifacts, generated):
+    print("[Fig 15] Aging graph")
+    num_nodes = artifacts["num_nodes"]
+    graph_idx = workload_sample_indices(artifacts["graph_workloads"])["ResNet-50"]
+    true_vals = slice_graph_values(predictions["predictor_true"], graph_idx, num_nodes)
+    pred_vals = slice_graph_values(predictions["predictor_pred"], graph_idx, num_nodes)
+
+    acc_graph = AcceleratorGraph(artifacts["cfg"].accelerator)
+    acc_graph.build()
+    pos = build_positions(acc_graph)
+    values = np.concatenate([true_vals, pred_vals])
+    norm = Normalize(vmin=float(values.min()), vmax=float(values.max()))
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.8))
+    for ax, vals, title in zip(axes, [true_vals, pred_vals], ["Observed", "Predicted"]):
+        nx.draw_networkx_edges(acc_graph.graph, pos, ax=ax, edge_color="lightgray", width=0.8, arrows=False)
+        nx.draw_networkx_nodes(
+            acc_graph.graph,
+            pos,
+            ax=ax,
+            node_color=vals,
+            cmap="hot",
+            vmin=float(values.min()),
+            vmax=float(values.max()),
+            node_size=280,
+        )
+        ax.set_title(title)
+        ax.axis("off")
+    savefig(fig, "fig15_aging_graph.pdf", generated)
+
 
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[Setup] Device: {device}")
-    print(f"[Setup] Output dirs: {PLOTS_DIR}  {TABLES_DIR}\n")
+    print("[Setup] Loading artifacts")
+    artifacts = load_artifacts()
+    predictions = collect_test_predictions(artifacts)
+    ablation_df = evaluate_ablation_models(artifacts)
 
-    # Load models once
-    predictor = None
-    try:
-        predictor = load_predictor(device)
-        print(f"[Setup] Loaded predictor from {PREDICTOR_CKPT.name}")
-    except Exception as e:
-        print(f"[Setup] WARNING: could not load predictor ({e}); figures that need it will use synthetic data")
+    predictor_r2, predictor_mae, _ = flatten_metrics(
+        predictions["predictor_pred"], predictions["predictor_true"]
+    )
+    step_r2 = per_step_r2(predictions["trajectory_pred"], predictions["trajectory_true"])
+    overall_traj_r2 = float(artifacts["metrics"]["trajectory"]["r2"])
+
+    print(f"[Setup] Predictor R2={predictor_r2:.4f}  MAE={predictor_mae:.4f}")
+    print(f"[Setup] Trajectory overall R2={overall_traj_r2:.4f}")
 
     generated: list[Path] = []
-
-    # ---- Figures ----
-    preds_cache, labels_cache = None, None
-    if predictor is not None:
-        try:
-            preds_cache, labels_cache, _ = run_predictor_on_test(predictor, device, max_samples=2000)
-        except Exception:
-            pass
-
-    # Fig 1: use cache if available
-    if preds_cache is not None:
-        rng = np.random.default_rng(0)
-        fig, ax = plt.subplots(figsize=COL1)
-        hb = ax.hexbin(labels_cache, preds_cache, gridsize=40, cmap="YlOrRd", mincnt=1, linewidths=0.1)
-        cb = fig.colorbar(hb, ax=ax, label="Count"); cb.ax.tick_params(labelsize=9)
-        lo = min(labels_cache.min(), preds_cache.min())
-        hi = max(labels_cache.max(), preds_cache.max())
-        ax.plot([lo, hi], [lo, hi], "r--", lw=1.4, label="Ideal")
-        r2 = r2_score(preds_cache, labels_cache); mae = mae_score(preds_cache, labels_cache)
-        ax.annotate(f"$R^2={r2:.4f}$\nMAE$={mae:.3f}$", xy=(0.05, 0.88), xycoords="axes fraction",
-                    fontsize=10, va="top",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
-        ax.legend(loc="lower right", fontsize=9)
-        ax.set_xlim(lo - 0.02, hi + 0.02); ax.set_ylim(lo - 0.02, hi + 0.02)
-        ax.set_xlabel("Ground Truth Aging Score"); ax.set_ylabel("Predicted Aging Score")
-        out = PLOTS_DIR / "fig1_prediction_scatter.pdf"
-        savefig(fig, out); generated.append(out)
-    else:
-        preds_cache, labels_cache = fig1_prediction_scatter(predictor, device, generated)
-
-    fig2_ablation_bars(predictor, device, generated)
-    fig3_trajectory_horizon(generated)
-    fig4_pareto_front(generated)
-    fig5_ppo_reward(generated)
-    fig6_aging_heatmap(predictor, device, generated)
-    fig7_method_comparison(generated)
+    fig1_prediction_scatter(predictions, generated)
+    fig2_ablation_bars(ablation_df, generated)
+    fig3_trajectory_horizon(step_r2, overall_traj_r2, generated)
+    fig4_pareto_front(artifacts["eval_df"], artifacts["pareto"], generated)
+    fig5_ppo_reward(artifacts["metrics"]["ppo"]["rewards"], generated)
+    fig6_aging_heatmap(predictions, artifacts, generated)
+    fig7_method_comparison(artifacts["eval_df"], generated)
     fig8_physics_curves(generated)
+    fig9_lifetime_per_workload(artifacts["eval_df"], generated)
+    fig10_latency_reduction(artifacts["eval_df"], generated)
+    fig11_lifetime_summary(artifacts["eval_df"], generated)
+    fig12_pareto_3d(artifacts["eval_df"], artifacts["pareto"], generated)
+    fig13_training_convergence(artifacts["training_history"], generated)
+    fig14_trajectory_pred_vs_actual(predictions, generated)
+    fig15_aging_graph(predictions, artifacts, generated)
 
-    # ---- Tables ----
-    if preds_cache is None or labels_cache is None:
-        rng = np.random.default_rng(0)
-        labels_cache = rng.uniform(0, 0.75, 5000)
-        preds_cache  = np.clip(labels_cache + rng.normal(0, 0.008, 5000), 0, 1)
-
-    table1_prediction_accuracy(preds_cache, labels_cache, generated)
-    table2_method_comparison(generated)
-    table3_per_workload(predictor, device, generated)
-
-    # ---- Summary ----
-    print(f"\n{'=' * 60}")
-    print(f"Generated {len(generated)} files:\n")
-    for p in generated:
-        print(f"  {p.relative_to(REPO_ROOT)}")
-    print("=" * 60)
+    print(f"\nGenerated {len(generated)} plot files")
+    for path in generated:
+        print(f"  {path.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":
