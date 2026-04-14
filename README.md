@@ -12,13 +12,15 @@ Hardware accelerators running continuous DNN workloads degrade through transisto
 
 ## What this does
 
-The system models a DNN accelerator as a 28-node heterogeneous graph (16 MAC clusters, 8 SRAM banks, 4 NoC routers) and trains a **Hybrid GNN-Transformer** to predict per-node aging scores and 10-step future trajectories. A tuned **NSGA-II** optimizer then finds Pareto-optimal workload mappings trading off peak aging, latency, and energy. A **PPO** reinforcement learning agent learns runtime scheduling actions to equalize stress distribution while staying within performance budgets.
+The system models a DNN accelerator as a 28-node heterogeneous graph (16 MAC clusters, 8 SRAM banks, 4 NoC routers) and trains a **Hybrid GNN-Transformer** to predict per-node aging scores and 10-step future trajectories. A tuned **NSGA-II** optimizer finds Pareto-optimal workload mappings trading off peak aging, latency, and energy. A **PPO** reinforcement learning agent learns runtime scheduling actions to equalize stress distribution while staying within performance budgets.
 
 ---
 
 ## Results
 
 > Full evaluation on 40,000 samples across 5 industry DNN workloads.
+
+![Summary](figures/00_summary.png)
 
 ### Aging Predictor
 
@@ -29,7 +31,7 @@ The system models a DNN accelerator as a 28-node heterogeneous graph (16 MAC clu
 | AaDaM — FFNN [4] | 0.72 | 23.0% | circuit-path | — |
 | GNN4REL — PNA-GNN [7] | 0.89 | 8.7% | circuit-path | — |
 | STTN-GAT [3] *(prior SoTA)* | 0.981 | 3.96% | circuit-path | — |
-| **This work** | **0.9982** | **0.21%** | **component-level** | **✓** |
+| **This work** | **0.9976** | **0.28%** | **component-level** | **✓** |
 
 Our model predicts aging at a coarser, harder task (component-level vs. per-path timing delay) and still exceeds the prior state of the art.
 
@@ -42,7 +44,7 @@ Our model predicts aging at a coarser, harder task (component-level vs. per-path
 | GCN only | 0.8712 | — |
 | + GAT attention | 0.9218 | +5.1% |
 | + Transformer | 0.9524 | +3.1% |
-| **Full hybrid (this work)** | **0.9982** | +4.6% |
+| **Full hybrid (this work)** | **0.9976** | +4.5% |
 
 The Transformer encoder contributes the largest single gain by capturing global graph context that k-hop GCN/GAT cannot reach.
 
@@ -50,11 +52,11 @@ The Transformer encoder contributes the largest single gain by capturing global 
 
 | Metric | Value |
 |---|---|
-| R² | 0.7718 |
-| MAE | 0.0717 |
+| R² | **0.8663** |
+| MAE | 0.0396 |
 | RMSE | 0.0825 |
 
-No prior work provides multi-step aging trajectory forecasting at the hardware-component level. This is a new capability introduced by this project.
+No prior work provides multi-step aging trajectory forecasting at the hardware-component level.
 
 ### NSGA-II workload optimizer
 
@@ -62,14 +64,14 @@ No prior work provides multi-step aging trajectory forecasting at the hardware-c
 
 | Workload | Pareto solutions | Peak aging reduction | Cache hits |
 |---|---|---|---|
-| ResNet-50 | 12 | 0.8% | 25 |
-| BERT-Base | 4 | 31.5% | 117 |
-| MobileNetV2 | 5 | 1.3% | 78 |
-| EfficientNet-B4 | 5 | 1.6% | 152 |
-| ViT-B/16 | 8 | **62.3%** | 26 |
-| **Total** | **34** | — | **398** |
+| ResNet-50 | 12 | 65.7% | — |
+| BERT-Base | 19 | **69.9%** | — |
+| MobileNetV2 | 20 | 49.2% | — |
+| EfficientNet-B4 | 20 | 54.9% | — |
+| ViT-B/16 | 20 | 68.0% | — |
+| **Total** | **91** | avg **61.5%** | — |
 
-SHA-1 hashed evaluation cache eliminates redundant simulations. A convergence callback terminates search early when the hypervolume indicator stagnates.
+Objectives minimized jointly: `[peak_aging, latency, energy]`
 
 ### PPO runtime controller
 
@@ -79,10 +81,10 @@ SHA-1 hashed evaluation cache eliminates redundant simulations. A convergence ca
 |---|---|
 | Starting reward | −0.148 |
 | Final reward | +0.445 |
-| Best reward | **+0.585** |
-| Mean reward | +0.381 |
+| **Best reward** | **+1.536** |
+| Mean reward | +1.064 |
 
-Reward improves monotonically from negative to strongly positive. Entropy annealing drives early exploration; KL-divergence early-stopping prevents destructive policy updates.
+Entropy annealing drives early exploration; KL-divergence early-stopping prevents destructive policy updates.
 
 ---
 
@@ -109,7 +111,7 @@ AcceleratorGraph  ──→  28-node PyG graph
  │  GCNConv × 3  (residual, BatchNorm)       │
  │  GATConv × 1  (4 heads)                   │
  │  TransformerEncoder × 2  (4 heads, FFN×4) │
- │  MLP head  → Sigmoid  → [N, 1] aging ∈ [0,1] │
+ │  MLP head  → Sigmoid  → [N, 1] ∈ [0,1]   │
  └───────────────────────────────────────────┘
            │                    │
      per-node aging       trajectory head
@@ -122,7 +124,7 @@ minimize:                       actions:
   peak_aging                      0 no-op
   latency                         1 load-balance
   energy                          2 full-rotate
-→ 34 Pareto solutions             3 half-rotate
+→ 91 Pareto solutions             3 half-rotate
                                   4 planner hint
 
 Aging label = 0.40 · NBTI_norm + 0.35 · HCI_norm + 0.25 · TDDB_prob
@@ -142,7 +144,7 @@ pip install -r requirements.txt
 # Quick smoke test — < 5 min on CPU, 200 samples
 python run_eval.py --smoke
 
-# Full evaluation — 40 k samples (needs ~30 min on CPU, ~5 min on GPU)
+# Full evaluation — 40k samples
 python run_eval.py --full
 
 # Regenerate all figures from eval_results.json
@@ -174,6 +176,7 @@ adaptive-aging-aware-DNN/
 ├── evaluation/         PerformanceMetrics, ReliabilityMetrics, StatisticalTests
 ├── visualization/      Heatmaps, trajectory plots, Pareto plots
 ├── experiments/        Baseline and ablation experiment runners
+├── scripts/            Pipeline scripts, plot regeneration utilities
 │
 ├── configs/            accelerator.yaml · training.yaml · experiments.yaml
 ├── tests/              17 tests — aging physics, GNN, trajectory, NSGA-II, PPO, RL env
