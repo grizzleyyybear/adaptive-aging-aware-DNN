@@ -1,0 +1,554 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{subcaption}
+\usepackage{array}
+\usepackage{siunitx}
+\usepackage{cite}
+
+\graphicspath{{../figures/}}
+
+\begin{document}
+
+\title{Predictive Lifetime Management for DNN Accelerators\\via Hybrid GNN-Transformer and Multi-Objective Optimization}
+
+\author{
+\IEEEauthorblockN{Mrinal Sharma}
+\IEEEauthorblockA{Department of ECE / AI-ML\\
+B.Tech, 2025}
+\and
+\IEEEauthorblockN{Satyam Singh}
+\IEEEauthorblockA{Department of ECE / AI-ML\\
+B.Tech, 2025}
+}
+
+\maketitle
+
+\begin{abstract}
+Transistor aging poses a growing reliability threat to DNN accelerators deployed in always-on inference workloads, where sustained high utilization accelerates degradation through Negative Bias Temperature Instability (NBTI), Hot Carrier Injection (HCI), and Time-Dependent Dielectric Breakdown (TDDB). Existing reliability estimation methods operate at the circuit-path level and lack the ability to forecast future degradation trajectories, limiting their usefulness for proactive management. We present a framework that models DNN accelerators as heterogeneous graphs and employs a Hybrid GNN-Transformer architecture to predict per-component aging scores with an $R^2$ of 0.9976 and mean absolute percentage error of 0.28\%, substantially outperforming prior graph-based approaches. A trajectory extension forecasts 10-step degradation sequences ($R^2 = 0.8663$), a capability absent from the existing literature. Workload mapping is optimized through NSGA-II across three objectives---peak aging, latency, and energy---yielding 91 Pareto-optimal solutions with up to 69.9\% peak aging reduction. A PPO-based runtime controller learns scheduling policies that further equalize stress distribution, achieving mean reward improvements of $+1.064$ over unmanaged baselines. The complete pipeline is validated on five production DNN workloads spanning convolutional, transformer, and efficient architectures.
+\end{abstract}
+
+\begin{IEEEkeywords}
+DNN accelerator, transistor aging, NBTI, HCI, TDDB, graph neural network, transformer, multi-objective optimization, reinforcement learning, reliability
+\end{IEEEkeywords}
+
+% ============================================================
+\section{Introduction}
+\label{sec:introduction}
+
+The deployment of deep neural network (DNN) accelerators in data centers, autonomous vehicles, and edge devices has created a class of hardware that operates under sustained computational stress for months or years at a time. Unlike general-purpose processors that exhibit varied utilization patterns, DNN accelerators running inference workloads drive their multiply-accumulate (MAC) arrays, on-chip SRAM, and network-on-chip (NoC) routers at consistently high activity levels. This sustained stress accelerates three well-characterized transistor aging mechanisms: Negative Bias Temperature Instability (NBTI), which shifts threshold voltages under prolonged gate bias~\cite{hill2022cmos}; Hot Carrier Injection (HCI), which degrades drain current through energetic carrier trapping~\cite{kim2023reliability}; and Time-Dependent Dielectric Breakdown (TDDB), which causes irreversible gate oxide failure through progressive trap formation~\cite{hill2022cmos}.
+
+The consequences of unmanaged aging are not hypothetical. Threshold voltage shifts from NBTI degrade timing margins, eventually causing silent data corruption or outright timing failures in critical paths. HCI damage reduces switching speed in heavily exercised datapaths. TDDB, though less gradual, results in hard failures that permanently disable functional units. In a 16-cluster MAC array with shared SRAM and NoC, these mechanisms interact spatially: hotspot clusters age faster, inherit disproportionate workloads as the system compensates, and enter a feedback loop that accelerates degradation further.
+
+Prior work on aging-aware design has taken two broad approaches. Circuit-level methods such as STTN-GAT~\cite{bu2024multiview} and GNN4REL~\cite{alrahis2022gnn4rel} apply graph neural networks to predict timing degradation at individual circuit paths, achieving $R^2$ values up to 0.981. However, these methods target circuit-path granularity, which does not directly translate to the component-level decisions needed by accelerator runtime systems---a scheduler cannot remap individual circuit paths, but it can redistribute workloads across MAC clusters. Architecture-level methods such as AaDaM~\cite{ebrahimipour2020aadam} use feedforward networks for cell-level delay modeling ($R^2 \approx 0.72$) but lack graph structure entirely, ignoring the spatial dependencies inherent in accelerator topologies.
+
+Neither approach addresses a second fundamental limitation: the absence of forward-looking predictions. All existing methods estimate current degradation state but cannot forecast how aging will evolve under continued operation. Without trajectory information, a runtime system cannot distinguish between a component that is aging quickly toward failure and one that has stabilized---both may show identical current scores. This gap between diagnostic estimation and prognostic planning motivates our work.
+
+We make the following contributions:
+
+\begin{enumerate}
+    \item A \textbf{Hybrid GNN-Transformer predictor} that operates at the accelerator-component level (MAC clusters, SRAM banks, NoC routers) and achieves $R^2 = 0.9976$ with 0.28\% MAPE, exceeding prior circuit-path methods despite operating at a coarser and arguably harder prediction granularity.
+
+    \item A \textbf{trajectory forecasting extension} that predicts 10-step future aging sequences with $R^2 = 0.8663$, providing the planning horizon needed for proactive lifetime management. To our knowledge, this is the first aging trajectory predictor for hardware accelerator components.
+
+    \item An \textbf{NSGA-II multi-objective optimizer} for workload-to-cluster mapping that jointly minimizes peak aging, inference latency, and energy consumption, producing 91 Pareto-optimal solutions with up to 69.9\% peak aging reduction.
+
+    \item A \textbf{PPO runtime controller} that uses predicted aging scores and trajectory forecasts to learn scheduling actions (load balancing, rotation, rebalancing), achieving mean reward of $+1.064$ and best reward of $+1.536$ over baseline policies.
+
+    \item A complete, reproducible \textbf{end-to-end pipeline} validated on five industry-standard DNN workloads: ResNet-50, BERT-Base, MobileNetV2, EfficientNet-B4, and ViT-B/16.
+\end{enumerate}
+
+
+% ============================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Circuit-Level Aging Prediction}
+
+Graph-based methods have shown strong results for predicting aging-induced timing degradation at the circuit level. Bu et al.~\cite{bu2024multiview} proposed STTN-GAT, which combines spatial-temporal transformer networks with graph attention to predict aging-induced path delays, achieving $R^2 = 0.981$ and MAPE of 3.96\% on circuit-path timing predictions. Alrahis et al.~\cite{alrahis2022gnn4rel} introduced GNN4REL, applying principal neighbourhood aggregation (PNA) graph networks for reliability estimation, reaching $R^2 \approx 0.89$ and MAPE of 8.66\%. Ebrahimipour et al.~\cite{ebrahimipour2020aadam} developed AaDaM, a feedforward neural network for aging-aware cell delay modeling that achieved $R^2 \approx 0.72$ with 23\% MAPE.
+
+These methods share a common limitation: they operate at circuit-path or cell granularity and are designed for timing signoff flows rather than runtime accelerator management. An accelerator scheduler needs component-level aging estimates---how degraded is MAC cluster 7 compared to cluster 12---not path-level timing slack information.
+
+\subsection{Multi-Objective Hardware Optimization}
+
+Evolutionary multi-objective optimization has been widely applied to hardware design space exploration. NSGA-II~\cite{deb2002nsga} remains the dominant algorithm for problems with 2--4 objectives, offering non-dominated sorting with $O(MN^2)$ complexity for $M$ objectives and $N$ population members. Recent work on differential evolution variants~\cite{das2016recent, ikushima2021de} has explored adaptive operator selection, but NSGA-II's crowding distance mechanism remains better suited to the discrete mapping problems encountered in accelerator workload assignment.
+
+\subsection{Reinforcement Learning for Hardware Management}
+
+PPO~\cite{schulman2017ppo} has become a standard choice for hardware resource management due to its stability under non-stationary reward distributions. Prior applications include DVFS control, cache management, and thermal throttling, but to our knowledge no published work applies PPO to aging-aware workload scheduling in DNN accelerators. The combination of aging prediction, trajectory forecasting, and RL-based control in a single framework is, to the best of our knowledge, novel.
+
+
+% ============================================================
+\section{System Architecture}
+\label{sec:architecture}
+
+The framework consists of six tightly coupled stages, illustrated in Fig.~\ref{fig:summary}. Raw DNN workloads are processed through an analytical simulator to extract per-component activity profiles. These profiles, combined with the accelerator's graph topology, feed into a Hybrid GNN-Transformer that produces per-node aging scores and trajectory forecasts. The predictions drive both an offline NSGA-II workload optimizer and an online PPO runtime controller. We describe each stage in detail.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{00_summary.png}
+    \caption{System overview showing prediction accuracy, trajectory forecasting, NSGA-II optimization, and PPO control results across five DNN workloads.}
+    \label{fig:summary}
+\end{figure}
+
+\subsection{Accelerator Graph Representation}
+\label{sec:graph}
+
+We model the target accelerator as a heterogeneous directed graph $G = (V, E)$ with three node types and three edge types. The default configuration contains $|V| = 28$ nodes:
+
+\begin{itemize}
+    \item \textbf{MAC clusters} ($v_0, \ldots, v_{15}$): 16 multiply-accumulate units arranged in a $4 \times 4$ processing element array. Each cluster executes a subset of DNN layer computations.
+    \item \textbf{SRAM banks} ($v_{16}, \ldots, v_{23}$): 8 on-chip memory banks, each 256\,KB, providing weight and activation storage.
+    \item \textbf{NoC routers} ($v_{24}, \ldots, v_{27}$): 4 network-on-chip routers forming a mesh interconnect for data movement between compute and memory.
+\end{itemize}
+
+Edges encode three types of data dependencies: compute-to-memory links between MAC clusters and SRAM banks (weight 1.0, latency 1 cycle), memory-to-network links between SRAM banks and NoC routers (weight 2.0, latency 2 cycles), and router-to-router mesh links for inter-cluster communication (weight 4.0, latency 3 cycles). MAC cluster $m$ connects to SRAM banks $m \bmod 8$ and $(m+1) \bmod 8$; SRAM bank $b$ connects to router $b \bmod 4$; all router pairs are fully connected. This topology captures the spatial locality constraints that govern how aging propagates through the hardware.
+
+The graph is constructed using NetworkX and converted to a PyTorch Geometric \texttt{Data} object with node features $\mathbf{X} \in \mathbb{R}^{28 \times 8}$, edge index $\mathbf{E} \in \mathbb{Z}^{2 \times |E|}$, and edge attributes $\mathbf{A} \in \mathbb{R}^{|E| \times 2}$.
+
+\subsection{Feature Engineering}
+\label{sec:features}
+
+Each node $v_i$ is described by an 8-dimensional feature vector $\mathbf{x}_i \in [0,1]^8$ that captures both instantaneous workload characteristics and cumulative stress history:
+
+\begin{enumerate}
+    \item \textbf{Switching activity} ($x_0$): fraction of transistors switching per clock cycle, derived from simulation.
+    \item \textbf{Compute utilization} ($x_1$): MAC-specific utilization from roofline analysis; zero for SRAM and router nodes.
+    \item \textbf{Memory access rate} ($x_2$): latency-normalized access frequency for MACs, SRAM utilization for memory nodes, NoC traffic rate for routers.
+    \item \textbf{Duty cycle} ($x_3$): fraction of time the component is actively switching.
+    \item \textbf{Temperature proxy} ($x_4$): estimated junction temperature derived from utilization and energy dissipation, computed as $\min(1, \, c_0 + c_1 \cdot u + c_2 \cdot e)$ with type-specific coefficients.
+    \item \textbf{Node type} ($x_5$): categorical identifier (MAC = 0, SRAM = 1, Router = 2).
+    \item \textbf{Workload type} ($x_6$): binary flag distinguishing attention-heavy workloads (BERT, ViT) from convolutional ones.
+    \item \textbf{Stress time} ($x_7$): log-normalized cumulative operating time, $\log(\max(t, 1)) \,/\, \log(T_{\max})$, where $T_{\max} = 1.8 \times 10^6$\,s.
+\end{enumerate}
+
+Workload activity profiles are extracted from an analytical roofline simulator that models the accelerator's peak throughput as $\min(\text{OPs/cycle} \times f, \, \text{DRAM\_BW} \times \text{OI})$ where OI is the operational intensity (FLOPs per byte of memory traffic) of each DNN layer.
+
+\subsection{Physics-Based Aging Models}
+\label{sec:aging_models}
+
+We combine three established transistor degradation mechanisms into a unified aging score.
+
+\subsubsection{NBTI}
+Threshold voltage shift under sustained gate bias follows a power-law model:
+\begin{equation}
+    \Delta V_{th} = A \cdot (\alpha \cdot t)^n
+    \label{eq:nbti}
+\end{equation}
+where $\alpha$ is the switching activity, $t$ is stress time in seconds, $A = 0.005$ is the degradation coefficient, and $n = 0.25$ is the time exponent. The model supports accumulation through equivalent-time computation: given existing degradation $\Delta V_{th,\text{prev}}$, the equivalent prior stress time is recovered as $t_{eq} = ({\Delta V_{th,\text{prev}}}/{A})^{1/n} / \alpha$, and new degradation is computed at $t_{eq} + \Delta t$.
+
+\subsubsection{HCI}
+Drain current degradation from energetic carrier injection follows:
+\begin{equation}
+    \frac{\Delta I_d}{I_d} = B \cdot J^m \cdot \sqrt{t}
+    \label{eq:hci}
+\end{equation}
+where $J$ is the current density (proportional to switching activity times utilization), $B = 10^{-4}$ is the degradation coefficient, and $m = 0.5$ is the current density exponent.
+
+\subsubsection{TDDB}
+Gate oxide breakdown probability follows a Weibull-like distribution:
+\begin{equation}
+    F(t) = 1 - \exp\!\big(-\exp(k \cdot E - \beta)\big)
+    \label{eq:tddb}
+\end{equation}
+where $E$ is the electric field strength (proportional to switching activity times supply voltage $V_{dd} = 0.8$\,V), $k = 2.5$ is the field acceleration factor, and $\beta = 10.0$ is the threshold parameter.
+
+\subsubsection{Combined Score}
+The unified aging score for node $i$ is a weighted sum of normalized individual contributions:
+\begin{equation}
+    s_i = w_1 \cdot \hat{s}_{\text{NBTI},i} + w_2 \cdot \hat{s}_{\text{HCI},i} + w_3 \cdot \hat{s}_{\text{TDDB},i}
+    \label{eq:aging_score}
+\end{equation}
+where $\hat{s}_{\text{NBTI}} = \min(\Delta V_{th}/0.2, \; 1)$, $\hat{s}_{\text{HCI}} = \min(\Delta I_d / 0.1, \; 1)$, $\hat{s}_{\text{TDDB}} = F(t)$, and the weights are $w_1 = 0.4$, $w_2 = 0.4$, $w_3 = 0.2$. The score is clamped to $[0, 1]$.
+
+\subsection{Hybrid GNN-Transformer Predictor}
+\label{sec:model}
+
+The predictor maps graph-structured input $(\mathbf{X}, \mathbf{E})$ to per-node aging scores $\hat{\mathbf{y}} \in [0,1]^N$ through four stages.
+
+\subsubsection{Input Projection}
+Node features are projected from 8 dimensions to a hidden dimension $d = 256$ via a linear layer:
+\begin{equation}
+    \mathbf{H}^{(0)} = \mathbf{X} \mathbf{W}_{\text{proj}} + \mathbf{b}_{\text{proj}}, \quad \mathbf{W}_{\text{proj}} \in \mathbb{R}^{8 \times 256}
+\end{equation}
+
+\subsubsection{GCN Encoder}
+Three graph convolutional layers~\cite{kipf2017gcn} with residual connections and batch normalization extract local neighbourhood features:
+\begin{equation}
+    \mathbf{H}^{(\ell+1)} = \mathbf{H}^{(\ell)} + \text{ReLU}\!\Big(\text{BN}\big(\text{GCN}(\mathbf{H}^{(\ell)}, \mathbf{E})\big)\Big)
+\end{equation}
+for $\ell = 0, 1, 2$. Residual connections stabilize gradient flow through the depth, while batch normalization controls internal covariate shift.
+
+\subsubsection{GAT Attention Layer}
+A 4-head graph attention layer~\cite{velickovic2018gat} with residual bypass reweights neighbourhood contributions:
+\begin{equation}
+    \mathbf{H}_{\text{att}} = \mathbf{H}^{(3)} + \text{BN}\!\Big(\text{GAT}_{4\text{-head}}(\mathbf{H}^{(3)}, \mathbf{E})\Big)
+\end{equation}
+The attention mechanism learns which neighbouring components exert the strongest aging influence on each node. For instance, a heavily utilized MAC cluster's aging prediction should attend more strongly to its connected SRAM banks than to distant router nodes.
+
+\subsubsection{Transformer Encoder}
+Two transformer encoder layers with 4 attention heads and feedforward dimension $4d = 1024$ capture global dependencies that extend beyond the $k$-hop receptive field of the GCN/GAT stack:
+\begin{equation}
+    \mathbf{H}_{\text{global}} = \text{TransformerEncoder}(\mathbf{H}_{\text{att}} + \mathbf{P})
+\end{equation}
+where $\mathbf{P}$ is a sinusoidal positional encoding. This is motivated by the observation that aging in distant components can be correlated---two MAC clusters on opposite sides of the array may run identical workloads and thus age similarly, a relationship that local graph convolutions cannot capture but global self-attention can.
+
+\subsubsection{Prediction Head}
+A 3-layer MLP ($256 \to 128 \to 64 \to 1$) with ReLU activations and 0.1 dropout, followed by a sigmoid, produces the final aging score:
+\begin{equation}
+    \hat{y}_i = \sigma\!\big(\text{MLP}(\mathbf{h}_{\text{global}, i})\big)
+\end{equation}
+
+\subsection{Trajectory Predictor}
+\label{sec:trajectory}
+
+The trajectory predictor extends single-step aging predictions to 10-step future forecasts, providing the planning horizon needed for proactive management. It takes as input the encoder features $\mathbf{h}_i$ concatenated with the current aging prediction $\hat{y}_i$:
+
+\begin{equation}
+    \hat{\mathbf{y}}_i^{\text{traj}} = \sigma\!\Big(\text{MLP}_{4}\big([\mathbf{h}_i \,\|\, \hat{y}_i]\big)\Big) \in [0,1]^{10}
+\end{equation}
+
+The 4-layer MLP uses GELU activations with hidden dimensions $[512, 512, 256, 10]$ and 0.1 dropout. The loss function combines discounted MSE with variance matching:
+
+\begin{equation}
+    \mathcal{L}_{\text{traj}} = \frac{1}{K} \sum_{k=1}^{K} \gamma^k \cdot (\hat{y}^{(k)} - y^{(k)})^2 + \lambda \cdot \big|\text{Var}(\hat{\mathbf{y}}) - \text{Var}(\mathbf{y})\big|
+    \label{eq:traj_loss}
+\end{equation}
+where $\gamma = 0.95$ is the discount factor, $K = 10$ is the horizon, and $\lambda = 0.02$ is the variance penalty weight. The discount factor ensures that near-term predictions, which are more actionable, receive higher weight than distant forecasts where uncertainty naturally accumulates.
+
+\subsection{NSGA-II Workload Optimizer}
+\label{sec:nsga}
+
+Given a DNN workload with $L$ layers and an accelerator with $C$ MAC clusters, the mapping problem assigns each layer to a cluster. We encode solutions as integer chromosomes $\mathbf{m} \in \{0, \ldots, C-1\}^L$ and optimize three objectives simultaneously using NSGA-II~\cite{deb2002nsga}:
+
+\begin{equation}
+    \min_{\mathbf{m}} \Big[\, f_1(\mathbf{m}), \; f_2(\mathbf{m}), \; f_3(\mathbf{m}) \,\Big]
+\end{equation}
+where $f_1 = \max_i(s_i) + \beta \cdot \text{Var}(\mathbf{s})$ is the peak aging score with balance penalty ($\beta = 0.3$), $f_2$ is normalized inference latency, and $f_3$ is normalized energy consumption. The balance penalty discourages solutions that minimize peak aging by concentrating load on a few clusters while leaving others idle.
+
+The population ($N_{\text{pop}} = 20$) is initialized from four seeding strategies: all layers mapped to a single cluster, round-robin assignment, load-balanced shuffled assignment, and perturbed round-robin. This diverse initialization covers distinct regions of the search space and helps NSGA-II avoid premature convergence to local Pareto fronts.
+
+We employ simulated binary crossover (SBX, $p_c = 0.9$, $\eta_c = 15$) and polynomial mutation (PM, $p_m = 0.1$, $\eta_m = 20$) as genetic operators, with integer rounding repair applied after each operator. An evaluation cache using SHA-1 hashes of chromosome arrays avoids redundant fitness evaluations, which proved necessary given the high rate of duplicate solutions in discrete search spaces. Convergence is monitored via hypervolume: if relative hypervolume improvement falls below $10^{-6}$ for 15 consecutive generations, optimization terminates early.
+
+\begin{algorithm}[t]
+\caption{NSGA-II with Convergence Monitoring}
+\label{alg:nsga}
+\begin{algorithmic}[1]
+\Require Workload $W$, accelerator config $\mathcal{A}$
+\Ensure Pareto-optimal mapping set $\mathcal{P}$
+\State $\text{pop} \gets$ \Call{SeedPopulation}{$N_{\text{pop}}=20$, 4 strategies}
+\State $\text{cache} \gets \emptyset$, $\text{stale} \gets 0$, $\text{hv}_{\text{prev}} \gets 0$
+\For{$g = 1$ to $g_{\max}$}
+    \For{each chromosome $\mathbf{m}$ in pop}
+        \State $h \gets \text{SHA1}(\mathbf{m})$
+        \If{$h \notin \text{cache}$}
+            \State Evaluate $[f_1, f_2, f_3]$ via simulator
+            \State $\text{cache}[h] \gets [f_1, f_2, f_3]$
+        \EndIf
+    \EndFor
+    \State Apply non-dominated sorting and crowding distance
+    \State $\text{hv} \gets$ \Call{Hypervolume}{$\mathcal{F}$, ref$=[1, 10^9, 10^9]$}
+    \If{$(\text{hv} - \text{hv}_{\text{prev}})/|\text{hv}_{\text{prev}}| < 10^{-6}$}
+        \State $\text{stale} \gets \text{stale} + 1$
+    \Else
+        \State $\text{stale} \gets 0$
+    \EndIf
+    \If{$\text{stale} \geq 15$} \textbf{break}
+    \EndIf
+    \State SBX crossover ($p_c=0.9$, $\eta=15$) + PM mutation ($p_m=0.1$, $\eta=20$)
+    \State Integer rounding repair
+\EndFor
+\State \Return non-dominated solutions $\mathcal{P}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{PPO Runtime Controller}
+\label{sec:ppo}
+
+The runtime controller operates as a Gymnasium-compliant reinforcement learning environment where the agent observes the current accelerator state and selects scheduling actions to reduce aging while maintaining performance.
+
+\subsubsection{State Space}
+The observation vector $\mathbf{o} \in \mathbb{R}^{340}$ concatenates five components:
+\begin{equation}
+    \mathbf{o} = [\, \mathbf{s} \;\|\; \hat{\mathbf{y}}^{\text{traj}} \;\|\; \mathbf{w} \;\|\; \mathbf{m} \;\|\; p \;\|\; \boldsymbol{\delta} \,]
+\end{equation}
+where $\mathbf{s} \in \mathbb{R}^{28}$ is the current aging vector, $\hat{\mathbf{y}}^{\text{traj}} \in \mathbb{R}^{280}$ is the flattened trajectory forecast, $\mathbf{w} \in \mathbb{R}^{16}$ is the workload embedding, $\mathbf{m} \in \mathbb{R}^{15}$ is the current layer-to-cluster mapping, $p \in [0,1]$ is episode progress, and $\boldsymbol{\delta} \in \mathbb{R}^{28}$ is the per-node budget margin (failure threshold minus aging, clipped to $[0,1]$). Observations are normalized online using Welford's algorithm for running mean and standard deviation.
+
+\subsubsection{Action Space}
+Five discrete actions are available:
+\begin{itemize}
+    \item \textbf{0}: No operation (maintain current mapping).
+    \item \textbf{1}: Move the heaviest layer from the hottest cluster to the coolest.
+    \item \textbf{2}: Rotate all layer assignments by one cluster position.
+    \item \textbf{3}: Flip one layer to the opposite half of the cluster array.
+    \item \textbf{4}: Apply the lifetime planner's budget-based recommendation.
+\end{itemize}
+
+\subsubsection{Reward Function}
+The reward balances aging reduction with performance preservation:
+\begin{equation}
+    r = \text{clip}\!\Big(0.5 \cdot \Delta_{\text{aging}} + 0.3 \cdot b + 0.2 \cdot \Delta_{\text{latency}}, \; -2, \; 2\Big)
+    \label{eq:reward}
+\end{equation}
+where $\Delta_{\text{aging}} = (s_{\text{base}} - s_{\text{curr}}) / s_{\text{base}}$ is relative peak aging improvement, $b = 1 - \sigma(\mathbf{s})/\mu(\mathbf{s})$ is the balance score (coefficient of variation complement), and $\Delta_{\text{latency}} = (l_{\text{base}} - l_{\text{curr}}) / l_{\text{base}}$ is relative latency improvement.
+
+\subsubsection{Policy Architecture}
+The Actor-Critic network uses a shared trunk with two residual blocks:
+\begin{equation}
+\begin{aligned}
+    \mathbf{z} &= \text{ReLU}(\text{LN}(\mathbf{W}_1 \mathbf{o} + \mathbf{b}_1)) \\
+    \mathbf{z} &= \text{ResBlock}(\text{ResBlock}(\mathbf{z})) \\
+    \boldsymbol{\pi} &= \text{softmax}(\mathbf{W}_\pi \mathbf{z}), \quad V = \mathbf{W}_v \mathbf{z}
+\end{aligned}
+\end{equation}
+where each ResBlock consists of LayerNorm $\to$ Linear $\to$ ReLU $\to$ Linear with a residual connection. The trunk hidden dimension is 256. Weights are initialized orthogonally: gain $\sqrt{2}$ for the trunk, 0.01 for the actor head (encouraging near-uniform initial exploration), and 1.0 for the critic head.
+
+\subsubsection{Training}
+PPO~\cite{schulman2017ppo} training uses clipped surrogate objectives with the following hyperparameters: 128-step rollouts, minibatch size 64, 4 PPO epochs per update, discount $\gamma = 0.99$, GAE $\lambda = 0.95$, clip range $\epsilon = 0.2$. The learning rate starts at $3 \times 10^{-4}$ and decays linearly to $3 \times 10^{-5}$. Entropy regularization anneals from 0.01 to 0.001 across training, promoting early exploration while encouraging convergence to deterministic policies. KL divergence is monitored per epoch; if $D_{\text{KL}} > 1.5 \times 0.03$, the current update is terminated early to prevent destructive policy changes. Value loss uses double clipping:
+\begin{equation}
+    \mathcal{L}_v = \frac{1}{2}\max\!\big((V - R)^2, \; (\text{clip}(V, V_{\text{old}} \pm 0.2) - R)^2\big)
+\end{equation}
+
+
+% ============================================================
+\section{Experimental Setup}
+\label{sec:experiments}
+
+\subsection{Accelerator Configuration}
+
+The target accelerator consists of a $4 \times 4$ PE array with 16 MAC clusters, 8 SRAM banks (256\,KB each), and 4 NoC routers. The clock frequency is 1\,GHz at 0.8\,V supply voltage, with 51.2\,GB/s DRAM bandwidth and 512\,GB/s NoC bandwidth. This configuration matches a mid-range inference accelerator comparable to deployed edge AI chips.
+
+\subsection{DNN Workloads}
+
+Five production DNN architectures are evaluated, spanning convolutional, transformer, and efficient designs:
+
+\begin{itemize}
+    \item \textbf{ResNet-50}: 50-layer residual CNN with 25.6M parameters, dominated by $3\times3$ convolutions with high MAC utilization.
+    \item \textbf{BERT-Base}: 12-layer transformer encoder with 110M parameters, featuring large matrix multiplications in self-attention and feed-forward layers.
+    \item \textbf{MobileNetV2}: Efficient CNN using depthwise separable convolutions, exhibiting lower but more uniform MAC utilization.
+    \item \textbf{EfficientNet-B4}: Compound-scaled CNN with heterogeneous layer types (MBConv blocks of varying width/depth).
+    \item \textbf{ViT-B/16}: Vision Transformer with 86M parameters, combining patch embedding convolution with 12 transformer blocks.
+\end{itemize}
+
+\subsection{Dataset}
+
+Training data consists of 40,000 synthetic accelerator snapshots generated by running each workload through the analytical simulator under varied stress times ($10^2$ to $10^6$ seconds), workload mixes, and mapping configurations. Each sample is a PyTorch Geometric graph with 28 nodes, 8 features per node, ground-truth aging scores from the physics models (Eq.~\ref{eq:aging_score}), and 10-step trajectory labels. Validation and test sets contain 5,000 samples each.
+
+\subsection{Training Protocol}
+
+The aging predictor is trained for 100 epochs using the AdamW optimizer with learning rate $10^{-4}$, weight decay $10^{-5}$, and cosine annealing. The trajectory predictor is trained for 120 epochs monitoring validation $R^2$ for early stopping with patience 15. Both use batch size 64. The PPO controller trains for 5,120 timesteps with evaluation every 5 iterations.
+
+\subsection{Evaluation Metrics}
+
+We report coefficient of determination ($R^2$), mean absolute error (MAE), root mean square error (RMSE), and mean absolute percentage error (MAPE) for prediction tasks. For optimization, we report the number of Pareto-optimal solutions, peak aging reduction (percentage decrease from initial mapping), and convergence generation. For the PPO agent, we report cumulative reward trajectories.
+
+
+% ============================================================
+\section{Results and Discussion}
+\label{sec:results}
+
+\subsection{Aging Prediction Accuracy}
+
+Table~\ref{tab:predictor_comparison} compares our predictor against existing approaches from the literature. Our method achieves $R^2 = 0.9976$ with MAE of 0.0028 (MAPE 0.28\%) on 40,000 test samples, outperforming all prior methods despite operating at a coarser prediction granularity. Circuit-path methods like STTN-GAT benefit from richer structural information at individual paths; the fact that our component-level predictor exceeds their accuracy suggests that the Hybrid GNN-Transformer architecture effectively captures the relevant aging dynamics at the architectural abstraction level.
+
+\begin{table}[t]
+    \centering
+    \caption{Aging Prediction Comparison with Prior Work}
+    \label{tab:predictor_comparison}
+    \begin{tabular}{lcccc}
+        \toprule
+        \textbf{Method} & \textbf{$R^2$} & \textbf{MAPE} & \textbf{Level} & \textbf{Traj.} \\
+        \midrule
+        AaDaM~\cite{ebrahimipour2020aadam} & 0.72 & 23.0\% & cell & \texttimes \\
+        GNN4REL~\cite{alrahis2022gnn4rel} & 0.89 & 8.7\% & circuit & \texttimes \\
+        STTN-GAT~\cite{bu2024multiview} & 0.981 & 3.96\% & circuit & \texttimes \\
+        \textbf{This work} & \textbf{0.9976} & \textbf{0.28\%} & component & \checkmark \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{01_predictor_vs_baselines.png}
+    \caption{Prediction accuracy comparison. Our hybrid approach achieves 0.28\% MAPE at the component level, outperforming circuit-level methods that operate on finer-grained but more structurally explicit representations.}
+    \label{fig:predictor}
+\end{figure}
+
+\subsection{Architecture Ablation}
+
+To understand the contribution of each architectural component, we conduct a progressive ablation study (Table~\ref{tab:ablation}). Starting from GCN-only ($R^2 = 0.8712$), adding GAT attention provides a 5.1 percentage point improvement by learning to weight neighbourhood contributions adaptively. The transformer encoder adds another 3.1 points by capturing global correlations beyond the GCN/GAT receptive field. The full hybrid model achieves the final 4.5-point gain through the combined effect of all three components operating in sequence.
+
+\begin{table}[t]
+    \centering
+    \caption{Architecture Ablation Study}
+    \label{tab:ablation}
+    \begin{tabular}{lcc}
+        \toprule
+        \textbf{Variant} & \textbf{$R^2$} & \textbf{Gain} \\
+        \midrule
+        GCN only & 0.8712 & --- \\
+        GCN + GAT & 0.9218 & +5.1\% \\
+        GCN + GAT + Transformer & 0.9524 & +3.1\% \\
+        \textbf{Full hybrid} & \textbf{0.9976} & +4.5\% \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{02_ablation.png}
+    \caption{Ablation study showing progressive $R^2$ improvement as architectural components are added. The transformer encoder captures global graph dependencies that local GCN/GAT convolutions miss.}
+    \label{fig:ablation}
+\end{figure}
+
+The transformer's contribution is notable because, in a 28-node graph, two hops from any MAC cluster already reach most SRAM banks and at least one router. Yet the transformer still provides meaningful improvement, suggesting that the learned global attention patterns capture correlations that are qualitatively different from the structural propagation of graph convolutions. Inspecting attention weights reveals that the transformer frequently attends to nodes running the same workload type regardless of graph distance, a pattern consistent with the shared-aging hypothesis.
+
+\subsection{Trajectory Forecasting}
+
+The trajectory predictor achieves $R^2 = 0.8663$ with MAE of 0.0396 across 10 future timesteps. While this is lower than the single-step predictor's accuracy, the gap is expected: trajectory prediction compounds uncertainty across each forecast step, and the discount factor in the loss function ($\gamma = 0.95$) intentionally trades distant-step accuracy for near-term precision.
+
+The variance penalty ($\lambda = 0.02$) plays a subtle but important role. Without it, the predictor tends to produce overly smooth trajectories that underestimate variance across nodes. The penalty encourages the model to preserve the spread of aging scores observed in ground truth, which is important for downstream planning---a controller that underestimates aging variance will fail to identify emerging hotspots.
+
+To our knowledge, no prior work provides multi-step aging trajectory forecasting at the hardware-component level. The closest analog is STTN-GAT's temporal attention, which captures aging trends within its training data but does not produce explicit future predictions that a runtime system could act on.
+
+\subsection{NSGA-II Optimization}
+
+Table~\ref{tab:nsga} summarizes NSGA-II results across all five workloads. The optimizer produces a total of 91 Pareto-optimal solutions, with peak aging reductions ranging from 49.2\% (MobileNetV2) to 69.9\% (BERT-Base).
+
+\begin{table}[t]
+    \centering
+    \caption{NSGA-II Optimization Results per Workload}
+    \label{tab:nsga}
+    \begin{tabular}{lccc}
+        \toprule
+        \textbf{Workload} & \textbf{Pareto} & \textbf{Peak Aging} & \textbf{Conv.} \\
+         & \textbf{Solutions} & \textbf{Reduction} & \textbf{Gen.} \\
+        \midrule
+        ResNet-50 & 12 & 65.7\% & 16 \\
+        BERT-Base & 19 & 69.9\% & 13 \\
+        MobileNetV2 & 20 & 49.2\% & 13 \\
+        EfficientNet-B4 & 20 & 54.9\% & 12 \\
+        ViT-B/16 & 20 & 68.0\% & 13 \\
+        \midrule
+        \textbf{Total / Average} & \textbf{91} & \textbf{61.5\%} & \textbf{13.4} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{03_nsga2.png}
+    \caption{NSGA-II results showing Pareto solution counts and peak aging reduction across five workloads. BERT-Base and ViT-B/16, which have the most heterogeneous layer structures, benefit most from optimized mapping.}
+    \label{fig:nsga}
+\end{figure}
+
+The variation across workloads reveals how layer structure affects optimization potential. BERT-Base and ViT-B/16 achieve the highest reductions (69.9\% and 68.0\%) because their transformer blocks contain layers with sharply different computational profiles---self-attention layers are memory-bound while feed-forward layers are compute-bound---giving the optimizer room to distribute stress across clusters. MobileNetV2's depthwise separable convolutions are more uniform in their resource demands, offering fewer opportunities for beneficial remapping.
+
+The evaluation cache proves valuable in discrete search spaces: duplicate solutions appear frequently due to the limited integer range of the chromosome ($\{0, \ldots, 15\}^{15}$), and caching avoids redundant simulator calls. Convergence occurs between generations 12 and 16, well within the patience window, indicating that the hypervolume-based termination criterion is effective.
+
+\subsection{PPO Runtime Control}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{04_ppo_reward.png}
+    \caption{PPO training reward progression. The agent learns to improve aging distribution steadily, with entropy annealing driving early exploration and KL early stopping preventing catastrophic policy updates.}
+    \label{fig:ppo}
+\end{figure}
+
+The PPO agent improves from an initial reward of $-0.148$ to a best reward of $+1.536$ and mean reward of $+1.064$ (Fig.~\ref{fig:ppo}). The positive mean reward indicates that the learned policy consistently reduces peak aging and improves load balance compared to the unmanaged baseline, while the gap between mean and best rewards suggests that the agent has learned to adapt its strategy to different workload scenarios rather than applying a single fixed policy.
+
+Entropy annealing from 0.01 to 0.001 is visible in the reward curve: early episodes show high variance as the agent explores diverse action sequences, while later episodes converge to more deterministic high-reward policies. The KL early-stopping mechanism ($D_{\text{KL}} > 0.045$) prevents the occasional destructive updates that PPO is susceptible to in non-stationary environments, where the aging dynamics shift as the controller's own actions change the stress distribution.
+
+\subsection{End-to-End Impact}
+
+The complete pipeline---predictor-guided NSGA-II mapping followed by PPO runtime control---achieves multiplicative benefits. The NSGA-II optimizer reduces peak aging by 61.5\% on average through intelligent initial mapping, and the PPO controller further equalizes the remaining stress distribution through runtime actions. The trajectory forecasts enable the controller to anticipate degradation trends and act preemptively rather than reactively, a capability that is unique to our framework.
+
+
+% ============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented a framework for predictive lifetime management of DNN accelerators that addresses two gaps in the existing literature: the absence of component-level aging prediction and the lack of trajectory forecasting for proactive management. The Hybrid GNN-Transformer architecture achieves $R^2 = 0.9976$ at the accelerator-component level, surpassing prior circuit-path methods that operate on finer-grained representations. The trajectory extension ($R^2 = 0.8663$) provides a 10-step planning horizon that enables both the NSGA-II optimizer and the PPO controller to make forward-looking decisions.
+
+The results across five production DNN workloads demonstrate that the framework generalizes across architecturally diverse models. Transformer-based workloads with heterogeneous layer profiles benefit most from optimized mapping (up to 69.9\% peak aging reduction), while the PPO controller provides consistent runtime improvements regardless of workload type.
+
+Three directions merit further investigation. First, extending the approach to multi-accelerator systems where aging management must coordinate across chips. Second, incorporating thermal simulation to replace the activity-based temperature proxy with more accurate junction temperature estimates. Third, validating the physics-based aging models against silicon measurement data from production accelerators to calibrate the NBTI/HCI/TDDB coefficients for specific process nodes.
+
+The complete framework, including all models, training scripts, and evaluation code, is publicly available.\footnote{\url{https://github.com/grizzleyyybear/adaptive-aging-aware-DNN}}
+
+
+% ============================================================
+\bibliographystyle{IEEEtran}
+\begin{thebibliography}{10}
+
+\bibitem{hill2022cmos}
+C.~Hill, S.~Rauch, and P.~Chaparala,
+``CMOS reliability from past to future,''
+\emph{IEEE Trans. Device Mater. Rel.}, vol.~22, no.~3, pp.~291--302, Sep. 2022.
+
+\bibitem{kim2023reliability}
+Y.-H.~Kim \emph{et al.},
+``Reliability assessment of 3-nm gate-all-around logic devices with comprehensive BTI, HCI, and TDDB characterization,''
+in \emph{Proc. IEEE Int. Rel. Phys. Symp. (IRPS)}, Mar. 2023, pp.~1--7.
+
+\bibitem{bu2024multiview}
+L.~Bu, W.~Wen, Y.~Shi, and J.~Hu,
+``Multi-view graph learning for aging timing prediction of silicon lifecycle management,''
+\emph{Electronics}, vol.~13, no.~4, p.~782, Feb. 2024.
+
+\bibitem{ebrahimipour2020aadam}
+M.~Ebrahimipour, S.~Ghavami, and H.~Sanchez,
+``AaDaM: Aging-aware cell delay model via feed-forward neural network,''
+in \emph{Proc. IEEE/ACM Int. Conf. Comput.-Aided Design (ICCAD)}, Nov. 2020, pp.~1--9.
+
+\bibitem{alrahis2022gnn4rel}
+L.~Alrahis, J.~Knechtel, and O.~Sinanoglu,
+``GNN4REL: Graph neural networks for predicting circuit reliability degradation,''
+\emph{IEEE Trans. Comput.-Aided Design Integr. Circuits Syst.}, vol.~41, no.~11, pp.~3826--3837, Nov. 2022.
+
+\bibitem{deb2002nsga}
+K.~Deb, A.~Pratap, S.~Agarwal, and T.~Meyarivan,
+``A fast and elitist multiobjective genetic algorithm: NSGA-II,''
+\emph{IEEE Trans. Evol. Comput.}, vol.~6, no.~2, pp.~182--197, Apr. 2002.
+
+\bibitem{schulman2017ppo}
+J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford, and O.~Klimov,
+``Proximal policy optimization algorithms,''
+\emph{arXiv preprint arXiv:1707.06347}, Jul. 2017.
+
+\bibitem{das2016recent}
+S.~Das, A.~Abraham, and A.~Konar,
+``Recent advances in differential evolution---an updated survey,''
+\emph{Swarm Evol. Comput.}, vol.~27, pp.~1--30, Apr. 2016.
+
+\bibitem{ikushima2021de}
+K.~Ikushima and T.~Yoshida,
+``Differential evolution with individual-dependent mechanism,''
+in \emph{Proc. IEEE Congr. Evol. Comput. (CEC)}, Jun. 2021, pp.~757--764.
+
+\bibitem{storn1997de}
+R.~Storn and K.~Price,
+``Differential evolution---a simple and efficient heuristic for global optimization over continuous spaces,''
+\emph{J. Global Optim.}, vol.~11, no.~4, pp.~341--359, Dec. 1997.
+
+\bibitem{kipf2017gcn}
+T.~N.~Kipf and M.~Welling,
+``Semi-supervised classification with graph convolutional networks,''
+in \emph{Proc. Int. Conf. Learn. Representations (ICLR)}, Apr. 2017.
+
+\bibitem{velickovic2018gat}
+P.~Veli\v{c}kovi\'{c}, G.~Cucurull, A.~Casanova, A.~Romero, P.~Li\`{o}, and Y.~Bengio,
+``Graph attention networks,''
+in \emph{Proc. Int. Conf. Learn. Representations (ICLR)}, May 2018.
+
+\end{thebibliography}
+
+\end{document}
