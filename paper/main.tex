@@ -15,7 +15,9 @@
 \usepackage{cite}
 
 % Allow figures from both ../figures and ./output_figures
-\graphicspath{{../figures/}{output_figures/}}
+% pdflatex picks .pdf > .png when no extension is given, so we prefer the
+% vector supplemental figures over the rasterized PNGs.
+\graphicspath{{../figures/}{output_figures/}{../}}
 
 \begin{document}
 
@@ -361,14 +363,14 @@ Fig.~\ref{fig:traj_horizon} shows what happens when we vary the horizon length i
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\columnwidth]{fig_trajectory_horizon_ablation.png}
+    \includegraphics[width=\columnwidth]{fig_trajectory_horizon_ablation}
     \caption{Trajectory accuracy as a function of forecast horizon. Step-1 accuracy is similar across $K$; longer horizons decay faster, as expected.}
     \label{fig:traj_horizon}
 \end{figure}
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\columnwidth]{fig_per_workload_trajectory_r2.png}
+    \includegraphics[width=\columnwidth]{fig_per_workload_trajectory_r2}
     \caption{Per-workload trajectory $R^2$ across forecast steps. BERT-Base and ViT-B/16 are easier to forecast (regular layer structure); MobileNetV2 is the hardest (uniform layer types make per-cluster differentiation small, so noise has a bigger relative effect).}
     \label{fig:traj_per_workload}
 \end{figure}
@@ -409,7 +411,7 @@ Fig.~\ref{fig:pareto_3d} visualizes the BERT-Base Pareto front itself in three o
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\columnwidth]{fig_pareto_front_3d.png}
+    \includegraphics[width=\columnwidth]{fig_pareto_front_3d}
     \caption{BERT-Base Pareto front in three objectives. Each point is a non-dominated mapping; colour encodes peak-aging score. The unmapped initial assignment (red star) sits in the dominated region.}
     \label{fig:pareto_3d}
 \end{figure}
@@ -420,7 +422,7 @@ Fig.~\ref{fig:heatmap} shows the spatial distribution of aging on the $4 \times 
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\columnwidth]{fig_aging_heatmap_before_after.png}
+    \includegraphics[width=\columnwidth]{fig_aging_heatmap_before_after}
     \caption{Spatial aging distribution on the MAC array before and after NSGA-II for BERT-Base. Before: a clear hotspot in the central cluster (highlighted). After: uniform low-aging distribution.}
     \label{fig:heatmap}
 \end{figure}
@@ -436,7 +438,7 @@ Fig.~\ref{fig:heatmap} shows the spatial distribution of aging on the $4 \times 
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\columnwidth]{fig_ppo_baseline_comparison.png}
+    \includegraphics[width=\columnwidth]{fig_ppo_baseline_comparison}
     \caption{PPO compared to two baselines (unmanaged, greedy hotspot migration) across 3 random seeds. PPO outperforms both, and the gap is largest in the second half of training, which suggests the agent is exploiting the trajectory forecast rather than just reacting.}
     \label{fig:ppo_baselines}
 \end{figure}
@@ -451,7 +453,7 @@ We are upfront that 5,120 timesteps is short by RL standards. The agent has clea
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\columnwidth]{fig_inference_profiling.png}
+    \includegraphics[width=\columnwidth]{fig_inference_profiling}
     \caption{Single-graph inference time and parameter count for the four ablation variants. The full hybrid model takes around 6\,ms on CPU and 1.1\,ms on GPU per 28-node graph---fast enough for runtime use at any reasonable scheduling cadence.}
     \label{fig:profiling}
 \end{figure}
