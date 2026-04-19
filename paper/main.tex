@@ -35,7 +35,7 @@ B.Tech, 2025}
 
 % ============================================================
 \begin{abstract}
-DNN accelerators running continuous inference workloads degrade through three transistor-level mechanisms: NBTI shifts threshold voltages, HCI reduces drain current in heavily switched devices, and TDDB causes irreversible gate-oxide breakdown. Existing reliability tools operate at the circuit-path level and report the present degradation state. They do not provide forward-looking estimates that a runtime scheduler can act on. We address this gap by representing the accelerator as a 28-node heterogeneous graph (16 MAC clusters, 8 SRAM banks, 4 NoC routers) and training a Hybrid GNN--Transformer on physics-grounded labels. On 40,000 simulated snapshots the predictor reaches $R^2 = 0.9976$ with mean absolute percentage error of $0.28\%$, and a trajectory head extends this to a 10-step forecast at $R^2 = 0.866$. The predictions feed two downstream stages. NSGA-II searches the layer-to-cluster mapping space across three objectives (peak aging, latency, energy) and returns 91 Pareto-optimal mappings across five workloads, with peak-aging reductions ranging from $49\%$ (MobileNetV2) to $70\%$ (BERT-Base). A PPO controller then operates at runtime, deciding when to rotate, balance, or retain the current mapping. Against an unmanaged baseline and a greedy hotspot-migration policy, PPO converges to a mean episode reward of $+1.06$. All experiments use a physics-driven analytical simulator; the absence of silicon validation is the principal limitation.
+A DNN accelerator that runs the same inference workload for months wears out unevenly. Three transistor-level effects do most of the damage: NBTI nudges threshold voltages upward, HCI chips away at drain current in the most heavily switched devices, and TDDB ends in outright gate-oxide failure. Most aging-aware tools today look at one circuit path at a time and tell you what shape it is in right now. That is not the question a runtime scheduler needs answered. The scheduler needs to know which clusters are about to get worse, and by how much, so it can move work before damage accumulates. We treat the accelerator as a 28-node heterogeneous graph---16 MAC clusters, 8 SRAM banks, 4 NoC routers---and train a Hybrid GNN--Transformer on physics-grounded labels. On 40,000 simulated snapshots it hits $R^2 = 0.9976$ at MAPE $0.28\%$, and a trajectory head pushes the same network out to a 10-step forecast at $R^2 = 0.866$. Two stages then consume those predictions. NSGA-II sweeps the layer-to-cluster mapping space against three objectives (peak aging, latency, energy) and returns 91 Pareto-optimal mappings across five workloads, with peak-aging cut by between $49\%$ (MobileNetV2) and $70\%$ (BERT-Base). A PPO controller then decides at runtime whether to rotate, rebalance, or simply leave the mapping alone. It converges to a mean episode reward of $+1.06$, well ahead of an unmanaged baseline and a greedy hotspot-migration policy. Everything reported here runs on an analytical simulator; the lack of silicon validation is the main caveat we carry through the paper.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -46,39 +46,39 @@ DNN accelerator, transistor aging, NBTI, HCI, TDDB, graph neural network, transf
 \section{Introduction}
 \label{sec:introduction}
 
-Inference accelerators deployed for sustained workloads exhibit a degradation profile that differs sharply from general-purpose silicon. When the same workload runs on the same hardware for months, the same MAC clusters and SRAM banks bear repeated stress. Over time this produces measurable shifts in timing margins, an increase in intermittent miscompares, and eventually outright cluster failures. By the time platform-level monitoring detects the problem, output integrity may already be compromised.
+An inference accelerator that lives in a data centre for two or three years does not age the way a general-purpose CPU does. Workloads are repetitive. The same MAC clusters fire on the same layers, the same SRAM banks cycle through the same weights, and the stress lands in the same places day after day. After a year of duty the centre of a $4\times 4$ PE array is often noticeably hotter than the corners. Timing margins narrow. Intermittent miscompares start to show up in tail-percentile telemetry. By the time anyone correlates this with aging the part has been quietly drifting for weeks.
 
-Three transistor-level mechanisms dominate this process. Negative Bias Temperature Instability (NBTI) shifts threshold voltages under sustained gate bias, gradually stretching critical-path delays~\cite{hill2022cmos}. Hot Carrier Injection (HCI) degrades drain current in the most heavily switched devices, particularly those in the datapath~\cite{kim2023reliability}. Time-Dependent Dielectric Breakdown (TDDB) leads to abrupt gate-oxide failure rather than a gradual drift. The mechanisms also interact through workload distribution: a cluster running hot ages faster, and reactive load balancing that routes more work to under-utilized neighbours can accelerate stress on the very units it intends to relieve.
+Three transistor-level effects drive the drift. Negative Bias Temperature Instability (NBTI) shifts threshold voltages under sustained gate bias and slowly stretches critical-path delays~\cite{hill2022cmos}. Hot Carrier Injection (HCI) eats away at drain current in the devices that switch most often, which on an inference accelerator means the datapath~\cite{kim2023reliability}. Time-Dependent Dielectric Breakdown (TDDB) is the one that does not give warning: when the gate oxide fails, the device is gone. The three also feed each other. A cluster running hot ages faster; a reactive load balancer that routes more work to its idle neighbours often ends up stressing the units it was trying to relieve.
 
-Existing aging-aware design tools were developed primarily for timing signoff and operate at the circuit-path level. STTN-GAT~\cite{bu2024multiview}, the strongest recent example, predicts path-delay degradation with $R^2 = 0.981$, and GNN4REL~\cite{alrahis2022gnn4rel} reaches $R^2 \approx 0.89$ using principal neighbourhood aggregation. AaDaM~\cite{ebrahimipour2020aadam} reports $R^2 \approx 0.72$ from a feed-forward network on cell-level features. These methods address a different problem from runtime scheduling: a scheduler cannot remap circuit paths, but it can redistribute workloads across clusters. The granularity gap between circuit-path estimation and architecture-level decision-making remains open in the literature.
+The aging-aware tools that exist today were built for timing signoff, not runtime scheduling, and they look at one circuit path at a time. STTN-GAT~\cite{bu2024multiview} is the strongest recent result we are aware of: $R^2 = 0.981$ at $3.96\%$ MAPE for path-delay degradation. GNN4REL~\cite{alrahis2022gnn4rel} reaches $R^2 \approx 0.89$ with principal neighbourhood aggregation, and AaDaM~\cite{ebrahimipour2020aadam} reports $R^2 \approx 0.72$ with a plain feed-forward network on cell-level features. All three are useful, but none of them speaks the language a scheduler can act on. A scheduler cannot rewire a path; it can move a layer from one cluster to another. The granularity gap between path-level estimation and architecture-level decisions has not really been closed.
 
-A second gap is more consequential for runtime use. Prior methods report present-day degradation; none provides a forward forecast of how that degradation will evolve. Two clusters with identical current aging scores can have very different trajectories, and a controller that cannot distinguish them will treat them identically. Diagnostic estimation is not equivalent to prognostic planning, and the latter is what enables proactive lifetime management.
+There is a second gap that, in our view, matters more. Every prior method reports the present-day state of a circuit. None of them predicts where it is heading. Two clusters with the same current aging score can have very different futures, and a controller that cannot tell them apart ends up treating them the same. Diagnosis is not the same thing as prognosis, and only the second one supports proactive lifetime management.
 
-\textbf{Contributions.} The paper makes five contributions, ordered by impact:
+\textbf{What the paper contributes.} Five things, roughly in the order we think they matter.
 
 \begin{enumerate}
-    \item A \emph{component-level} predictor of accelerator aging based on a Hybrid GNN--Transformer. It reaches $R^2 = 0.9976$ on a 40k-snapshot dataset, exceeding the strongest circuit-level baselines in the literature despite operating on a coarser target.
+    \item A \emph{component-level} aging predictor built around a Hybrid GNN--Transformer. On a 40k-snapshot dataset it reaches $R^2 = 0.9976$, which is higher than the strongest circuit-level baselines we could find, even though it is solving a coarser problem.
 
-    \item A trajectory head producing 10-step forward forecasts of per-node aging at $R^2 \approx 0.866$. To our knowledge no published method does this at the component level for DNN accelerators.
+    \item A trajectory head that turns the same backbone into a 10-step forecast at $R^2 \approx 0.866$. As far as we have been able to determine, no published method does this at the component level for DNN accelerators.
 
-    \item An NSGA-II workload optimizer over three objectives (peak aging, latency, energy) with hypervolume-based early stopping and a SHA-1 evaluation cache. The optimizer returns 91 Pareto-optimal mappings across five workloads, with peak-aging reductions of $49.2\%$ to $69.9\%$.
+    \item An NSGA-II workload optimizer over three objectives---peak aging, latency, energy---with hypervolume-based early stopping and a SHA-1 evaluation cache. Across five workloads it returns 91 Pareto-optimal mappings, cutting peak aging by between $49.2\%$ and $69.9\%$.
 
-    \item A PPO runtime controller that consumes both the current aging vector and the trajectory forecast. It outperforms an unmanaged baseline and a greedy hotspot-migration policy under the reward model used here.
+    \item A PPO runtime controller that takes both the current aging vector and the forecast as input. Under our reward model it beats both an unmanaged baseline and a greedy hotspot-migration heuristic.
 
-    \item A reproducible end-to-end pipeline (predictor $\to$ NSGA-II $\to$ PPO $\to$ evaluation) covering ResNet-50, BERT-Base, MobileNetV2, EfficientNet-B4, and ViT-B/16, with code and figures released alongside the paper.
+    \item An end-to-end pipeline (predictor $\to$ NSGA-II $\to$ PPO $\to$ evaluation) that runs ResNet-50, BERT-Base, MobileNetV2, EfficientNet-B4 and ViT-B/16 from a single script, with code and figures released alongside the paper.
 \end{enumerate}
 
-The dataset used throughout is synthetic; Section~\ref{sec:limitations} discusses the implications.
+The dataset is synthetic, and we should be clear about that up front. Section~\ref{sec:limitations} returns to what it costs us.
 
 % ============================================================
 \section{Related Work}
 \label{sec:related}
 
-\textbf{Circuit-level aging prediction.} The most directly comparable line of work applies graph learning to circuit netlists. Bu et al.~\cite{bu2024multiview} propose STTN-GAT, which combines spatial--temporal transformer attention with graph attention to predict per-path delay degradation, reaching $R^2 = 0.981$ at MAPE of $3.96\%$. Alrahis et al.~\cite{alrahis2022gnn4rel} use principal neighbourhood aggregation in GNN4REL and report $R^2 \approx 0.89$ at $8.66\%$ MAPE. Ebrahimipour et al.~\cite{ebrahimipour2020aadam} present AaDaM, a feed-forward delay predictor reaching $R^2 \approx 0.72$. All three target circuit-path or cell-delay estimation, which is a distinct task from architecture-level workload distribution: a runtime scheduler has no netlist in hand, only a set of MAC clusters and a workload to dispatch.
+\textbf{Graph-based aging prediction at the circuit level.} The closest line of related work uses graph learning over circuit netlists. Bu et al.~\cite{bu2024multiview} fuse spatial--temporal transformer attention with graph attention in STTN-GAT and report $R^2 = 0.981$ at $3.96\%$ MAPE on per-path delay degradation. Alrahis et al.~\cite{alrahis2022gnn4rel}, with PNA aggregation in GNN4REL, hit $R^2 \approx 0.89$ at $8.66\%$ MAPE. Ebrahimipour et al.~\cite{ebrahimipour2020aadam} step further back with AaDaM, a feed-forward delay predictor sitting at $R^2 \approx 0.72$. All three solve circuit-path or cell-delay estimation. That is a different problem from ours: a scheduler does not have a netlist on hand, it has a set of MAC clusters and a workload to dispatch. The interesting open question is whether a learned model can carry the same kind of accuracy up to the architecture level, where it can actually drive scheduling decisions.
 
-\textbf{Multi-objective hardware optimization.} NSGA-II~\cite{deb2002nsga} remains a standard choice for 2--4 objective design-space search. Differential-evolution variants~\cite{das2016recent,ikushima2021de,storn1997de} offer adaptive operator selection and can converge faster in continuous domains. Our problem is discrete (integer chromosomes mapping layers to clusters) and modest-dimensional, conditions under which NSGA-II's crowding-distance mechanism performs well. Initial experiments with DE were brittle under the required integer-rounding repair, and we retained NSGA-II.
+\textbf{Multi-objective optimization for hardware.} NSGA-II~\cite{deb2002nsga} is still the workhorse for 2--4 objective design-space search. Differential-evolution variants~\cite{das2016recent,ikushima2021de,storn1997de} have explored adaptive operator selection and tend to do well in continuous spaces. Our search space is discrete (integer chromosomes that map layers to clusters) and only moderately high-dimensional, which is exactly the territory where NSGA-II's crowding-distance mechanism shines. We did try DE early on, but the integer-rounding repair made it brittle, so we kept NSGA-II.
 
-\textbf{RL for hardware management.} PPO~\cite{schulman2017ppo} has been applied to DVFS, cache management, prefetching, and thermal throttling. We are not aware of published work applying PPO to aging-aware workload migration on DNN accelerators. The combination of (i) a learned aging predictor, (ii) a learned trajectory forecast, and (iii) a PPO controller that consumes both within a single pipeline is, to our knowledge, novel.
+\textbf{RL for hardware management.} PPO~\cite{schulman2017ppo} has been applied to DVFS, cache management, prefetching and thermal throttling, among other things. We have not been able to find a paper that applies it to aging-aware workload migration on DNN accelerators. Combining (i) a learned aging predictor, (ii) a learned forecast head, and (iii) a PPO controller that uses both, all in one pipeline, appears to be new.
 
 % ============================================================
 \section{System Architecture}
@@ -91,7 +91,7 @@ The dataset used throughout is synthetic; Section~\ref{sec:limitations} discusse
     \label{fig:summary}
 \end{figure}
 
-The pipeline is six stages. A roofline-style analytical simulator emits per-component activity for a workload mapped onto a candidate configuration. An activity extractor converts that into the eight-feature vector per node described below. The accelerator graph itself is fixed by the configuration. The Hybrid GNN--Transformer takes the graph and features and produces both an aging score and a 10-step trajectory per node. NSGA-II uses these (plus latency and energy estimates) to produce Pareto-optimal mappings, and PPO learns to act on the resulting state at runtime. Fig.~\ref{fig:summary} shows the headline numbers.
+There are six stages from end to end. A roofline-style analytical simulator emits per-component activity for a given workload mapped onto a candidate configuration. An activity extractor converts that into the eight-feature node vector described below. The accelerator graph itself is fixed by the configuration. The Hybrid GNN--Transformer takes the graph and the feature matrix and returns both a current aging score and a 10-step trajectory per node. NSGA-II then uses these together with latency and energy estimates to produce Pareto-optimal mappings, and PPO learns a runtime policy on top. Fig.~\ref{fig:summary} groups the headline numbers in one place.
 
 \subsection{Accelerator graph}
 \label{sec:graph}
@@ -122,12 +122,12 @@ Each node carries an 8-dimensional feature vector $\mathbf{x}_i \in [0,1]^8$:
     \item \textbf{Stress time} $x_7$: $\log(\max(t,1)) / \log(T_{\max})$ with $T_{\max} = 1.8 \times 10^6$\,s.
 \end{enumerate}
 
-The temperature feature is an activity-derived proxy rather than the output of a thermal simulator; the limitations section returns to this. Activity profiles come from a roofline-style simulator that estimates throughput as $\min(\text{OPs/cycle} \cdot f, \, \text{DRAM\_BW} \cdot \text{OI})$ per layer, where OI is operational intensity (FLOPs per byte).
+The temperature feature is a proxy, not a thermal simulation, and Section~\ref{sec:limitations} comes back to that. Activity profiles come from a roofline-style simulator that estimates throughput as $\min(\text{OPs/cycle} \cdot f,\, \text{DRAM\_BW} \cdot \text{OI})$ per layer, where OI is operational intensity (FLOPs per byte).
 
 \subsection{Physics-based aging labels}
 \label{sec:aging_models}
 
-Node labels combine three established degradation models. The models themselves are standard; the contribution lies in their use as supervision for a component-level graph predictor.
+We label each node by combining three standard degradation models. The models themselves are not new; what is new is using them as supervision for a component-level graph predictor.
 
 \subsubsection{NBTI}
 A standard power law for threshold-voltage shift:
@@ -157,7 +157,7 @@ with $k = 2.5$ and $\beta = 10.0$, and $E$ taken proportional to switching activ
     s_i = w_1 \hat{s}_{\text{NBTI},i} + w_2 \hat{s}_{\text{HCI},i} + w_3 \hat{s}_{\text{TDDB},i}, \quad s_i \in [0,1]
     \label{eq:aging_score}
 \end{equation}
-with normalizations $\hat{s}_{\text{NBTI}} = \min(\Delta V_{th}/0.2, 1)$, $\hat{s}_{\text{HCI}} = \min(\Delta I_d/0.1, 1)$, $\hat{s}_{\text{TDDB}} = F(t)$, and weights $w_1 = w_2 = 0.4$, $w_3 = 0.2$. The weighting emphasizes NBTI and HCI (gradual, controllable) over TDDB (rare, catastrophic), reflecting that the controller is intended to manage gradual stress and avoid the conditions that lead to breakdown. The weights were not exhaustively swept; Section~\ref{sec:limitations} discusses this.
+with normalizations $\hat{s}_{\text{NBTI}} = \min(\Delta V_{th}/0.2,\,1)$, $\hat{s}_{\text{HCI}} = \min(\Delta I_d/0.1,\,1)$, $\hat{s}_{\text{TDDB}} = F(t)$, and weights $w_1 = w_2 = 0.4$, $w_3 = 0.2$. We weight NBTI and HCI more heavily than TDDB on purpose: the controller is meant to manage the slow, gradual stress mechanisms and steer the chip away from the conditions that cause breakdown. We did not sweep these weights exhaustively, and Section~\ref{sec:limitations} comes back to that.
 
 \subsection{Hybrid GNN--Transformer predictor}
 \label{sec:model}
@@ -165,14 +165,14 @@ with normalizations $\hat{s}_{\text{NBTI}} = \min(\Delta V_{th}/0.2, 1)$, $\hat{
 \begin{figure}[t]
     \centering
     \includegraphics[width=\columnwidth]{02_ablation.png}
-    \caption{Architecture ablation. Each added component---GAT attention, transformer encoder, and prediction head---contributes a measurable $R^2$ improvement, with the transformer providing a larger contribution than the small graph size would suggest.}
+    \caption{Architecture ablation. Adding GAT attention, then the transformer encoder, then the prediction head each yields a measurable $R^2$ gain. The transformer contributes more than one might expect on a 28-node graph.}
     \label{fig:ablation}
 \end{figure}
 
-The model is four stages stacked. Input projection ($8 \to 256$), three GCN layers~\cite{kipf2017gcn} with residuals and batch norm, one 4-head GAT layer~\cite{velickovic2018gat} with residual, then two transformer encoder layers with 4 heads and FFN dimension $4d = 1024$. A 3-layer MLP head ($256 \to 128 \to 64 \to 1$, ReLU, 0.1 dropout) ends in a sigmoid.
+The model is four stacked stages: an input projection ($8 \to 256$), three GCN layers~\cite{kipf2017gcn} with residual connections and batch norm, a single 4-head GAT layer~\cite{velickovic2018gat} with a residual, and two transformer encoder layers with 4 heads and FFN dimension $4d = 1024$. A 3-layer MLP head ($256 \to 128 \to 64 \to 1$, ReLU, 0.1 dropout) ends in a sigmoid.
 
-\subsubsection{Architectural rationale}
-The GCN block extracts local topology features. GAT introduces neighbour-importance weighting; empirically, a heavily loaded MAC cluster's aging prediction depends substantially more on its connected SRAM bank than on a distant router, a distinction that uniform GCN aggregation cannot make. The transformer's contribution was less predictable in advance: on a 28-node graph two GCN hops cover most reachable structure, so transformer self-attention might appear redundant. In practice it was not. Inspection of the learned attention weights shows consistent attention between nodes running the same workload type regardless of graph distance, a non-local pattern that local message passing cannot represent.
+\subsubsection{Why this stack}
+The GCN block extracts local topology features. GAT lets the model learn which neighbours actually matter for aging propagation. Empirically a heavily loaded MAC cluster's prediction depends much more on the SRAM bank it is talking to than on a distant router, and unweighted GCN aggregation cannot express that. The transformer is the part that surprised us. On a 28-node graph two GCN hops cover almost everything reachable, so we expected the transformer to be near-redundant. It was not. When we inspected the learned attention weights, the transformer was consistently attending to nodes running the same workload type regardless of graph distance---a pattern that local message passing simply cannot represent.
 
 The forward pass is:
 \begin{align}
@@ -196,7 +196,7 @@ The MLP is 4 layers with dimensions $[512, 512, 256, 10]$, GELU activations, 0.1
     \mathcal{L}_{\text{traj}} = \frac{1}{K} \sum_{k=1}^{K} \gamma^k (\hat{y}^{(k)} - y^{(k)})^2 + \lambda \,\big|\text{Var}(\hat{\mathbf{y}}) - \text{Var}(\mathbf{y})\big|
     \label{eq:traj_loss}
 \end{equation}
-with $\gamma = 0.95$, $K = 10$, $\lambda = 0.02$. The variance term is small in magnitude but materially improves prediction sharpness: without it, predictions over-smoothed across nodes and obscured the hotspots that the controller is meant to react to.
+with $\gamma = 0.95$, $K = 10$, $\lambda = 0.02$. The variance term is small in magnitude but it pulls its weight: without it, the predictions over-smooth across nodes and the hotspots the controller is supposed to react to disappear into the average.
 
 \subsection{NSGA-II mapping optimizer}
 \label{sec:nsga}
@@ -205,9 +205,9 @@ A workload of $L$ layers maps onto $C$ clusters via integer chromosomes $\mathbf
 \begin{equation}
     \min_{\mathbf{m}} \big[\,f_1(\mathbf{m}),\; f_2(\mathbf{m}),\; f_3(\mathbf{m})\,\big]
 \end{equation}
-where $f_1 = \max_i s_i + \beta \cdot \text{Var}(\mathbf{s})$ (peak aging plus a balance penalty, $\beta = 0.3$), $f_2$ is normalized inference latency, and $f_3$ is normalized energy. The $\beta$ term prevents NSGA-II from converging to degenerate minimum-peak solutions that concentrate all work on one or two clusters while leaving the rest idle. To keep the encoding length uniform across workloads, each workload's layers are pre-grouped into $L = 15$ contiguous macro-blocks (consecutive same-shape layers fused), so the chromosome is always $\mathbf{m} \in \{0, \ldots, 15\}^{15}$ regardless of the raw layer count.
+where $f_1 = \max_i s_i + \beta \cdot \text{Var}(\mathbf{s})$ (peak aging plus a balance penalty, with $\beta = 0.3$), $f_2$ is normalized inference latency, and $f_3$ is normalized energy. The $\beta$ term is what stops NSGA-II from finding the cheap minimum-peak solution that just dumps everything onto one or two clusters and leaves the rest cold. To keep the encoding length the same across workloads, we pre-group each workload's layers into $L = 15$ contiguous macro-blocks (consecutive same-shape layers are fused), so the chromosome is always $\mathbf{m} \in \{0,\ldots,15\}^{15}$ regardless of how many raw layers the network has.
 
-The population is small ($N_{\text{pop}} = 20$), which is on the low end for a $16^{15}$ search space. Two compensating measures are applied: initialization from four diverse seeding strategies (single-cluster, round-robin, load-balanced shuffled, perturbed round-robin) and a SHA-1 evaluation cache that eliminates duplicate evaluations. Genetic operators are SBX crossover ($p_c = 0.9$, $\eta = 15$) and PM mutation ($p_m = 0.1$, $\eta = 20$), with integer-rounding repair. Convergence stops when relative hypervolume improvement remains below $10^{-6}$ for 15 consecutive generations.
+The population is small ($N_{\text{pop}} = 20$), which is on the low end for a $16^{15}$ search space. We compensate in two ways. First, we initialize from four different seeding strategies---single-cluster, round-robin, load-balanced shuffled, and a perturbed round-robin---so the starting population already covers very different regions of the space. Second, the SHA-1 evaluation cache means duplicate chromosomes are evaluated by the simulator only once. Genetic operators are SBX crossover ($p_c = 0.9$, $\eta = 15$) and polynomial mutation ($p_m = 0.1$, $\eta = 20$), with an integer-rounding repair step. We stop when the relative hypervolume improvement stays below $10^{-6}$ for 15 generations in a row.
 
 \begin{algorithm}[t]
 \caption{NSGA-II with hypervolume convergence}
@@ -244,7 +244,7 @@ The population is small ($N_{\text{pop}} = 20$), which is on the low end for a $
 \subsection{PPO runtime controller}
 \label{sec:ppo}
 
-The runtime stage is a Gymnasium environment in which the agent observes accelerator state and selects a remapping action.
+The runtime piece is a Gymnasium environment in which the agent watches the accelerator state and picks a remapping action each step.
 
 \subsubsection{State}
 The observation $\mathbf{o} \in \mathbb{R}^{368}$ concatenates: current aging vector $\mathbf{s} \in \mathbb{R}^{28}$, flattened trajectory forecast $\hat{\mathbf{y}}^{\text{traj}} \in \mathbb{R}^{280}$, workload embedding $\mathbf{w} \in \mathbb{R}^{16}$, current mapping $\mathbf{m} \in \mathbb{R}^{15}$, episode progress $p \in [0,1]$, and per-node budget margin $\boldsymbol{\delta} \in \mathbb{R}^{28}$. Online normalization uses Welford's algorithm.
@@ -264,23 +264,23 @@ Five discrete options:
     r = \text{clip}\big(0.5 \cdot \Delta_{\text{aging}} + 0.3 \cdot b + 0.2 \cdot \Delta_{\text{lat}}, -2, 2\big)
     \label{eq:reward}
 \end{equation}
-where $\Delta_{\text{aging}} = (s_{\text{base}} - s_{\text{curr}})/s_{\text{base}}$ is relative peak-aging improvement, $b = 1 - \sigma(\mathbf{s})/\mu(\mathbf{s})$ is a balance score, and $\Delta_{\text{lat}}$ is relative latency improvement. The weights $(0.5, 0.3, 0.2)$ were selected from short pilot runs; a Pareto-style sweep over reward components is left for future work.
+where $\Delta_{\text{aging}} = (s_{\text{base}} - s_{\text{curr}})/s_{\text{base}}$ is the relative peak-aging improvement, $b = 1 - \sigma(\mathbf{s})/\mu(\mathbf{s})$ is a balance score, and $\Delta_{\text{lat}}$ is the relative latency improvement. The weights $(0.5, 0.3, 0.2)$ came out of a few short pilot runs. A more principled choice would involve a Pareto-style sweep over the reward components; we leave that to future work.
 
 \subsubsection{Policy network}
-Shared Actor--Critic trunk with two residual blocks at hidden dimension 256 and separate heads for action logits and value. The trunk uses orthogonal initialization with gain $\sqrt{2}$, the actor head with gain $0.01$ (yielding a near-uniform initial policy and broad early exploration), and the critic head with gain $1.0$.
+A shared Actor--Critic trunk made of two residual blocks at hidden dimension 256, with separate heads for action logits and value. The trunk uses orthogonal init with gain $\sqrt{2}$. The actor head uses gain $0.01$ so the initial policy is close to uniform and the agent has room to explore; the critic head uses gain $1.0$.
 
 \subsubsection{Training}
-PPO~\cite{schulman2017ppo} with clipped surrogate, 128-step rollouts, minibatch size 64, 4 PPO epochs per update, $\gamma = 0.99$, GAE $\lambda = 0.95$, clip $\epsilon = 0.2$, and a double-clipped value loss. Learning rate decays linearly from $3\times 10^{-4}$ to $3 \times 10^{-5}$, and the entropy coefficient anneals from $0.01$ to $0.001$. A PPO update is stopped early when $\text{KL} > 1.5 \times 0.03$, which prevents the large policy jumps that destabilize PPO in non-stationary settings, where the aging dynamics shift as the agent's own actions reshape the stress distribution.
+PPO~\cite{schulman2017ppo} with the clipped surrogate, 128-step rollouts, minibatch size 64, 4 PPO epochs per update, $\gamma = 0.99$, GAE $\lambda = 0.95$, clip $\epsilon = 0.2$, and a double-clipped value loss. Learning rate decays linearly from $3\times 10^{-4}$ to $3\times 10^{-5}$ and the entropy coefficient anneals from $0.01$ to $0.001$. A PPO update is stopped early once $\text{KL} > 1.5 \times 0.03$, which keeps the policy from making the destructive jumps it tends to make in non-stationary settings. The aging dynamics here are non-stationary in a very direct sense: the agent's own actions reshape the stress distribution it then has to react to.
 
 % ============================================================
 \section{Experimental Setup}
 \label{sec:experiments}
 
 \subsection{Accelerator}
-$4 \times 4$ PE array, 16 MACs, 8 SRAM banks at 256\,KB each, 4 NoC routers, 1\,GHz at 0.8\,V, 51.2\,GB/s DRAM bandwidth, 512\,GB/s NoC bandwidth. This is roughly the configuration of a mid-range edge inference accelerator.
+A $4 \times 4$ PE array: 16 MACs, 8 SRAM banks at 256\,KB each, 4 NoC routers, 1\,GHz at 0.8\,V, 51.2\,GB/s DRAM bandwidth, 512\,GB/s NoC bandwidth. This is roughly what a mid-range edge inference accelerator looks like today.
 
 \subsection{Workloads}
-Five, chosen for architectural diversity:
+We use five, chosen so that they stress the array in noticeably different ways:
 
 \begin{itemize}
     \item \textbf{ResNet-50}: 50-layer CNN, 25.6M params, mostly $3 \times 3$ convolutions, high MAC utilization.
@@ -297,7 +297,7 @@ Five, chosen for architectural diversity:
 Predictor: 100 epochs, AdamW, LR $10^{-4}$, weight decay $10^{-5}$, cosine annealing, batch 64. Trajectory: 120 epochs, monitoring validation $R^2$ for early stopping with patience 15. PPO: 5,120 timesteps, eval every 5 iterations.
 
 \subsection{Metrics}
-$R^2$, MAE, RMSE, MAPE for prediction. For NSGA-II: number of Pareto-optimal solutions, peak-aging reduction relative to the worst initial seed, and convergence generation. For PPO: episode-mean reward and best-episode reward.
+For prediction: $R^2$, MAE, RMSE and MAPE. For NSGA-II: the number of Pareto-optimal solutions, the peak-aging reduction relative to the worst initial seed, and the generation at which convergence is declared. For PPO: episode-mean reward and best-episode reward.
 
 % ============================================================
 \section{Results}
@@ -305,7 +305,7 @@ $R^2$, MAE, RMSE, MAPE for prediction. For NSGA-II: number of Pareto-optimal sol
 
 \subsection{Aging prediction}
 
-The Hybrid GNN--Transformer reaches $R^2 = 0.9976$ on the 40k test set with MAE $0.0028$ and MAPE $0.28\%$. Table~\ref{tab:predictor_comparison} places this against the closest prior work. Two clarifications are warranted. First, the comparison spans granularities: STTN-GAT and GNN4REL operate on circuit paths, AaDaM on cells, and the present work on architectural components. The result is not a strict apples-to-apples improvement, but it establishes that the model is well-calibrated at the granularity where scheduling decisions are made. Second, the high $R^2$ is partly attributable to the smoothness of the simulator-generated aging surface, which has no process variation, thermal noise, or measurement noise. Real silicon would introduce all three, and the predictor's accuracy under those conditions is an open question (Section~\ref{sec:limitations}).
+The Hybrid GNN--Transformer reaches $R^2 = 0.9976$ on the 40k test set, with MAE $0.0028$ and MAPE about $0.28\%$. Table~\ref{tab:predictor_comparison} sits this next to the closest prior work we could find. Two things are worth saying about that comparison. The first is that it spans granularities: STTN-GAT and GNN4REL work at the circuit-path level, AaDaM at the cell level, and we work at the component level. So this is not a strict apples-to-apples improvement, and we are not pitching it as one. What it does establish is that at the granularity where scheduling decisions actually get made, the model is well-calibrated. The second is that the high $R^2$ is partly the simulator's fault, in a sense---the aging surface it produces is smooth, with no process variation, no thermal noise, and no measurement noise. Real silicon will be messier, and how much accuracy survives the move to silicon is an open question (Section~\ref{sec:limitations}).
 
 \begin{table}[t]
     \centering
@@ -348,15 +348,15 @@ The Hybrid GNN--Transformer reaches $R^2 = 0.9976$ on the 40k test set with MAE 
     \end{tabular}
 \end{table}
 
-Table~\ref{tab:ablation} progressively adds components. Adding GAT contributes the largest single increase in $R^2$, consistent with the expectation that attention can down-weight neighbours whose state is uninformative for a given target node. The transformer's contribution was not predicted in advance: on a graph this small, two GCN hops cover almost all reachable structure, so transformer self-attention might appear marginal. The observed improvement suggests otherwise. Inspection of the learned attention patterns indicates that the transformer captures cross-array workload-type correlations, in which two MAC clusters running the same logical layer (for example, of BERT) age in correlated ways even when they sit on opposite ends of the array. Local message passing has no efficient way to represent such non-local correlations.
+Table~\ref{tab:ablation} adds components one at a time. GAT contributes the biggest single jump in $R^2$, which fits intuition: attention can down-weight neighbours whose state is uninformative for a given target node, and uniform GCN aggregation cannot. The transformer's contribution is the part we did not predict. On a graph with 28 nodes, two GCN hops already cover almost everything reachable, so we expected transformer self-attention to be close to a no-op. It was not. When we looked at the learned attention patterns we suspect---and we cannot prove this cleanly---that the transformer is picking up cross-array workload-type correlations: two MAC clusters running the same logical layer of BERT will age in correlated ways even if they are on opposite sides of the array. Local message passing has no efficient way to express that.
 
-Fig.~\ref{fig:ablation} visualizes the same results. Improvements diminish as components are added, but each contributes measurably.
+Fig.~\ref{fig:ablation} shows the same numbers visually. The gains diminish as we add components, which is what one would expect, but none of the blocks is dead weight.
 
 \subsection{Trajectory forecasting}
 
-The 10-step trajectory predictor reaches $R^2 = 0.866$ aggregated over all forecast steps, with MAE $\approx 0.040$. This is lower than the single-step accuracy, as expected: uncertainty compounds across a 10-step horizon, and the discount factor $\gamma = 0.95$ in the loss explicitly trades distant-step accuracy for near-term precision.
+The 10-step trajectory head reaches $R^2 = 0.866$ aggregated across all forecast steps, with MAE around $0.040$. That is lower than the single-step accuracy, and we are fine with that: uncertainty compounds across a 10-step horizon, and the discount factor $\gamma = 0.95$ in the loss explicitly trades distant-step accuracy for near-term precision.
 
-Fig.~\ref{fig:traj_horizon} reports the effect of varying the horizon length. At $K = 5$ aggregate $R^2$ is approximately $0.91$; at $K = 10$ it is $0.866$; at $K = 15$ it drops to approximately $0.83$. Extending the horizon further provides limited benefit for downstream control, since the PPO controller acts on time scales shorter than 15 forecast steps. $K = 10$ was chosen as a balance between forecast utility and accuracy.
+Fig.~\ref{fig:traj_horizon} shows what happens when we vary the horizon itself. At $K = 5$ the aggregate $R^2$ is around $0.91$; at $K = 10$ we get the $0.866$ we report; at $K = 15$ it falls to about $0.83$. Pushing the horizon further does not help much for downstream control because the PPO controller acts on time scales shorter than 15 forecast steps anyway. We picked $K = 10$ as a compromise.
 
 \begin{figure}[t]
     \centering
@@ -372,7 +372,7 @@ Fig.~\ref{fig:traj_horizon} reports the effect of varying the horizon length. At
     \label{fig:traj_per_workload}
 \end{figure}
 
-Fig.~\ref{fig:traj_per_workload} provides a per-workload breakdown. The ordering matches the expected pattern: structured transformer workloads (BERT, ViT) decay most slowly, and depthwise-separable MobileNetV2 decays fastest. The variance-matching loss term primarily benefits the harder cases.
+Fig.~\ref{fig:traj_per_workload} breaks the same number down by workload. The ranking is roughly what we would have guessed in advance: structured transformer workloads (BERT, ViT) decay most slowly, and depthwise-separable MobileNetV2 decays fastest. The variance-matching loss term mostly helps the harder cases.
 
 \subsection{NSGA-II mapping}
 
@@ -402,9 +402,9 @@ Fig.~\ref{fig:traj_per_workload} provides a per-workload breakdown. The ordering
     \label{fig:nsga}
 \end{figure}
 
-Table~\ref{tab:nsga} and Fig.~\ref{fig:nsga} summarize the optimizer's output: 91 Pareto-optimal mappings across the five workloads, with peak-aging reductions from $49\%$ to $70\%$. The pattern across workloads is consistent. The more heterogeneous a workload's layer profile, the more flexibility NSGA-II has. BERT-Base and ViT-B/16 contain layers with very different operational intensities (memory-bound attention vs. compute-bound FFN), allowing the optimizer to balance cluster stress. MobileNetV2's depthwise-separable layers are uniform from a stress perspective, leaving less headroom; its $49\%$ reduction is the lowest of the five.
+Table~\ref{tab:nsga} together with Fig.~\ref{fig:nsga} summarizes the optimizer: 91 Pareto-optimal mappings across the five workloads, with peak-aging cut by between $49\%$ and $70\%$. The pattern across workloads is consistent. The more heterogeneous the layer profile, the more freedom NSGA-II has. BERT-Base and ViT-B/16 contain layers with very different operational intensities---memory-bound attention vs. compute-bound FFN---and the optimizer can place them so cluster stress evens out. MobileNetV2's depthwise-separable layers all look the same from a stress perspective, which is why its $49\%$ reduction is the lowest of the five: there is just less to gain.
 
-Fig.~\ref{fig:pareto_3d} visualizes the BERT-Base Pareto front in the three objectives. The front contains genuine trade-offs rather than a single dominating point, and the initial mapping (red star) sits well inside the dominated region, confirming that the optimizer dominates the unmodified assignment.
+Fig.~\ref{fig:pareto_3d} shows the BERT-Base Pareto front itself in three objectives. Two things stand out. The optimizer finds real trade-offs, not just a single dominating point. And the initial mapping (red star) sits well inside the dominated region, which is the basic sanity check we wanted.
 
 \begin{figure}[t]
     \centering
@@ -413,9 +413,9 @@ Fig.~\ref{fig:pareto_3d} visualizes the BERT-Base Pareto front in the three obje
     \label{fig:pareto_3d}
 \end{figure}
 
-Convergence behaviour is consistent across runs: most workloads stabilize around generations 12--16, well within the patience window of 15 stale generations. The evaluation cache had a larger effect on wall-clock time than initially anticipated. In a $16^{15}$ search space, randomly generated mappings collide often enough that caching saves between 30\% and 60\% of simulator calls in practice, depending on workload.
+Convergence behaviour is consistent across runs: most workloads stabilize around generations 12--16, well within the 15-generation patience window. The evaluation cache turned out to matter more than we expected when we first wrote the optimizer. Even in a $16^{15}$ space, randomly generated mappings collide often enough that the cache saves anywhere from 30\% to 60\% of simulator calls in practice, depending on the workload.
 
-Fig.~\ref{fig:heatmap} shows the spatial distribution of aging on the $4 \times 4$ MAC array before and after NSGA-II for BERT-Base. The before plot exhibits a hotspot at the array centre with peak score around $0.8$; the after plot is markedly more uniform, with peak around $0.22$. The result indicates that the optimizer flattens the spatial distribution rather than only reducing the maximum value.
+Fig.~\ref{fig:heatmap} shows the spatial distribution of aging on the $4 \times 4$ MAC array before and after NSGA-II, for BERT-Base. The before plot has a clear hotspot at the array centre with a peak score around $0.8$; the after plot is much more uniform, with the peak down around $0.22$. This is roughly what we hoped to see: the optimizer is not just lowering the worst-case number, it is flattening the spatial distribution.
 
 \begin{figure}[t]
     \centering
@@ -429,65 +429,65 @@ Fig.~\ref{fig:heatmap} shows the spatial distribution of aging on the $4 \times 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\columnwidth]{04_ppo_reward.png}
-    \caption{PPO training reward, smoothed across 5-iteration windows. Initial reward is negative (worse than baseline), climbs during the entropy-anneal phase, and stabilizes around mean $+1.06$ with best $+1.54$ (truncated from $+1.536$).}
+    \caption{PPO training reward, smoothed across 5-iteration windows. Reward starts negative (worse than baseline), climbs through the entropy-annealing phase, and stabilizes around mean $+1.06$, with a best of $+1.54$ (truncated from $+1.536$).}
     \label{fig:ppo}
 \end{figure}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\columnwidth]{fig_ppo_baseline_comparison}
-    \caption{PPO compared to two baselines (unmanaged, greedy hotspot migration) across 3 random seeds. PPO outperforms both, with the largest gap appearing in the second half of training, consistent with the agent exploiting the trajectory forecast rather than reacting only to current state.}
+    \caption{PPO against two baselines (unmanaged, greedy hotspot migration) across 3 random seeds. PPO beats both, and the gap widens in the second half of training, which is consistent with the agent learning to use the trajectory forecast rather than just reacting to the current state.}
     \label{fig:ppo_baselines}
 \end{figure}
 
-The PPO agent starts at episode reward $-0.148$ (worse than the unmanaged baseline, as expected from a randomly initialized policy) and converges to mean $+1.064$ with best $+1.536$ (Fig.~\ref{fig:ppo}). A positive reward in absolute terms indicates that the learned policy outperforms the unmanaged baseline on the composite metric $0.5 \Delta_{\text{aging}} + 0.3 \cdot b + 0.2 \cdot \Delta_{\text{lat}}$. The gap between mean reward and best reward is informative on its own: convergence of all episodes to a similar reward would suggest policy collapse, whereas the observed spread is consistent with the agent specializing its strategy by workload context.
+The PPO agent starts at episode reward $-0.148$, which is worse than the unmanaged baseline---about what we would expect from a randomly initialized policy---and converges to mean $+1.064$, with a best of $+1.536$ (Fig.~\ref{fig:ppo}). The fact that the reward is positive in absolute terms tells us the learned policy beats the unmanaged baseline on the composite $0.5\,\Delta_{\text{aging}} + 0.3\,b + 0.2\,\Delta_{\text{lat}}$. The gap between mean and best reward is itself informative: if every episode collapsed to roughly the same reward we would suspect policy collapse. The spread we actually see is consistent with the agent specializing its strategy by workload context, which is the behaviour we wanted.
 
-Fig.~\ref{fig:ppo_baselines} compares against two baselines across 3 random seeds. The unmanaged baseline remains flat near zero. The greedy hotspot-migration policy (move the heaviest layer from the hottest cluster every step) reaches approximately $+0.6$ and then plateaus. PPO surpasses both. The shaded bands also indicate non-trivial seed-to-seed variation, motivating the multi-seed mean and standard deviation reported here.
+Fig.~\ref{fig:ppo_baselines} compares against two baselines across 3 random seeds. The unmanaged baseline sits flat near zero, as expected. The greedy hotspot-migration policy (move the heaviest layer from the hottest cluster, every step) climbs to about $+0.6$ and plateaus there. PPO climbs past both. The shaded bands also show that seed-to-seed variation is not negligible---reporting a single-seed PPO result would have been misleading, which is why we report multi-seed mean and standard deviation.
 
-The 5,120-timestep training budget is short by RL standards. The reward curve in Fig.~\ref{fig:ppo} is still rising, indicating that the policy has not converged and that additional training would be expected to improve mean reward.
+5,120 timesteps is short by RL standards, and we should be honest about that. The reward curve in Fig.~\ref{fig:ppo} is still rising, so the policy has not really converged. We read this as ``learning is happening and more training would help'' rather than ``this is the policy a deployed system would run''.
 
 \subsection{Inference cost}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\columnwidth]{fig_inference_profiling}
-    \caption{Single-graph inference time and parameter count for the four ablation variants. The full hybrid model requires approximately 6\,ms on CPU and 1.1\,ms on GPU per 28-node graph, which is fast enough for runtime use at typical scheduling cadences.}
+    \caption{Single-graph inference time and parameter count for the four ablation variants. The full hybrid model takes roughly 6\,ms on CPU and 1.1\,ms on GPU per 28-node graph---fast enough for runtime use at the scheduling cadences aging-aware control actually needs.}
     \label{fig:profiling}
 \end{figure}
 
-Runtime cost is a practical constraint for any controller-side prediction model. Fig.~\ref{fig:profiling} reports single-graph inference latency and parameter count for the four ablation variants. The full Hybrid GNN--Transformer requires approximately $6.3$\,ms on CPU and $1.1$\,ms on GPU per forward pass, with about $4.1$\,MB of parameters. The acceptability of this cost depends on the scheduling cadence: for a once-per-millisecond decision loop it would be too slow on CPU, but for the 100-ms range that aging-aware scheduling targets, it is fast enough without GPU acceleration.
+Runtime cost matters for any model that lives on the controller side of the loop. Fig.~\ref{fig:profiling} reports single-graph inference latency and parameter count for the four ablation variants. The full Hybrid GNN--Transformer takes about $6.3$\,ms on CPU and $1.1$\,ms on GPU per forward pass, with roughly $4.1$\,MB of parameters. Whether that is acceptable depends entirely on the scheduling cadence. For a once-per-millisecond decision loop it would be too slow on CPU. For the once-per-100-ms range that aging-aware scheduling actually targets, it is comfortably fast even without GPU acceleration.
 
 \subsection{End-to-end picture}
 
-With the stages combined---NSGA-II for offline mapping and PPO for runtime adjustment---the mean peak-aging reduction is approximately $61.5\%$ from NSGA-II alone, with PPO providing additional balancing at runtime. The trajectory forecast enables the PPO controller to act before a hotspot fully forms rather than after it. The framework is not a replacement for thermal management or DVFS; it operates above them as a workload-distribution layer.
+When the pieces are stacked---NSGA-II for the offline mapping, PPO for runtime adjustment---the mean peak-aging reduction is around $61.5\%$ from NSGA-II alone, with PPO adding a balancing effect on top at runtime. The trajectory forecast is what lets the PPO controller act before a hotspot has fully formed rather than only after the fact. The framework is not a replacement for thermal management or DVFS; it sits on top of them as a workload-distribution layer.
 
 % ============================================================
 \section{Limitations and Threats to Validity}
 \label{sec:limitations}
 
-The following limitations bound the claims made in this paper.
+We list these openly. A paper that hides its limitations is harder to trust than one that names them.
 
-\textbf{Synthetic data.} All 40,000 training samples are produced by an analytical simulator. There is no validation against silicon measurements or against an external benchmark. The reported $R^2 = 0.9976$ should therefore be interpreted as a measure of fit to the simulator's outputs, which is a meaningful but limited claim. Real hardware introduces process variation, thermal noise, measurement noise, and aging trajectories that are unlikely to factor as cleanly as the $0.4/0.4/0.2$ NBTI/HCI/TDDB weighting suggests. Calibrating the physics-model coefficients ($A$, $B$, $k$, $\beta$) against published silicon data and re-evaluating is the most important next step.
+\textbf{Synthetic data.} All 40,000 training samples come from our own analytical simulator. There is no validation against silicon measurements or any external benchmark. The reported $R^2 = 0.9976$ should therefore be read as ``the model fits the simulator's outputs very well''---which is a meaningful claim but a limited one. Real hardware has process variation, thermal noise, measurement noise, and aging trajectories that almost certainly do not factor as cleanly as our $0.4/0.4/0.2$ NBTI/HCI/TDDB weighting suggests. Calibrating the physics-model coefficients ($A$, $B$, $k$, $\beta$) against published silicon data and re-evaluating from there is the single most important next step.
 
-\textbf{Short PPO training.} 5,120 timesteps is well below the $10^5$--$10^6$ range used in most published PPO results for hardware management. The reward curve in Fig.~\ref{fig:ppo} has not flattened. A longer run would likely yield a higher mean reward and possibly a different action-distribution profile. The short budget was chosen for reproducibility on commodity CPUs; the PPO numbers should be read as evidence that learning is occurring rather than as a converged policy.
+\textbf{Short PPO training.} 5,120 timesteps is well short of the $10^5$--$10^6$ used in most published PPO results for hardware management. The reward curve in Fig.~\ref{fig:ppo} has not flattened. A longer run would probably give a higher mean reward and possibly a different mix of preferred actions. We chose the short budget for reproducibility on commodity CPUs; the PPO numbers should be read as ``learning is happening'' rather than ``this is the converged policy''.
 
-\textbf{Small NSGA-II population.} $N_{\text{pop}} = 20$ for a $16^{15} \approx 10^{18}$ search space is small. The 91 Pareto solutions across five workloads are reproducible (fixed seed) but not exhaustive. Running with $N_{\text{pop}} = 100$ and $g_{\max} = 50$ would likely surface a denser front.
+\textbf{Small NSGA-II population.} $N_{\text{pop}} = 20$ for a $16^{15} \approx 10^{18}$ search space is small. The 91 Pareto solutions across the five workloads are real and reproducible (fixed seed), but they are not exhaustive. Running with $N_{\text{pop}} = 100$ and $g_{\max} = 50$ would almost certainly surface a denser front.
 
-\textbf{Reward weights chosen by inspection.} The $(0.5, 0.3, 0.2)$ coefficients in Eq.~\ref{eq:reward} were selected after short pilot runs rather than a Pareto-style sweep over reward components. A different weighting could shift the agent toward more aggressive aging reduction at the cost of latency, or vice versa.
+\textbf{Reward weights chosen by hand.} The $(0.5, 0.3, 0.2)$ coefficients in Eq.~\ref{eq:reward} came out of a few short pilot runs. We did not run a Pareto-style sweep over reward terms. A different weighting could shift the agent toward more aggressive aging reduction at the cost of latency, or the other way around.
 
-\textbf{Temperature is a proxy, not a simulation.} The $x_4$ feature is an activity- and energy-derived estimate rather than the output of a thermal RC network. In a deployed system, replacing this with a per-node thermal simulator or on-die temperature sensors would tighten the link between predicted and actual aging.
+\textbf{Temperature is a proxy, not a simulation.} The $x_4$ feature is an activity- and energy-derived estimate, not the output of a thermal RC network. For a deployed system, replacing this with a per-node thermal simulator (or, ideally, on-die temperature sensors) would tighten the link between predicted and actual aging.
 
-\textbf{Cross-workload generalization is untested.} Training and evaluation samples are drawn from all five workloads. We did not train on, for example, ResNet-50 snapshots alone and test on ViT-B/16. That experiment would clarify whether the predictor is learning aging dynamics or memorizing per-workload patterns.
+\textbf{Cross-workload generalization is untested.} We trained and evaluated on samples drawn from all five workloads. We did not, for example, train on ResNet-50 snapshots alone and test on ViT-B/16. That experiment would tell us whether the predictor is learning aging dynamics or memorizing per-workload patterns.
 
-\textbf{Hyperparameter sensitivity for aging coefficients.} A full sensitivity sweep over $A$, $B$, $k$, $\beta$ was not performed. Manual perturbations (varying $A$ by $\pm 50\%$) did not change the qualitative pattern of results, but a complete sensitivity table is left for future work.
+\textbf{Hyperparameter sensitivity for the aging coefficients.} We did not run a full sensitivity sweep over $A$, $B$, $k$ and $\beta$. Rough manual perturbations (varying $A$ by $\pm 50\%$) did not change the qualitative pattern of results, but a proper sensitivity table is missing.
 
 % ============================================================
 \section{Conclusion}
 \label{sec:conclusion}
 
-This paper presents a single framework that performs three coupled tasks: predicting per-component aging on a DNN accelerator, forecasting how that aging will evolve, and using both signals to make scheduling decisions. The Hybrid GNN--Transformer reaches $R^2 = 0.9976$ on component-level prediction, and the trajectory head produces $R^2 \approx 0.866$ over a 10-step horizon. NSGA-II converts these predictions into 91 Pareto-optimal mappings across five workloads, with peak-aging reductions of $49$--$70\%$ depending on workload structure. A PPO controller, supplied with the same predictions, learns a runtime policy that outperforms both an unmanaged baseline and a greedy hotspot-migration heuristic.
+We set out to build one framework that does three coupled things: predict per-component aging on a DNN accelerator, forecast where that aging is heading, and use both signals to make scheduling decisions. The Hybrid GNN--Transformer reaches $R^2 = 0.9976$ on component-level prediction and the trajectory head produces a useful $R^2 \approx 0.866$ over a 10-step horizon. NSGA-II turns those predictions into 91 Pareto-optimal mappings across five workloads, with peak-aging reductions of $49$--$70\%$ depending on workload structure. A PPO controller, given the same predictions, learns a runtime policy that beats both an unmanaged baseline and a greedy hotspot-migration heuristic.
 
-The principal remaining uncertainty is how much of the predictor's accuracy would carry over to real silicon. The dataset is synthetic, the aging coefficients are drawn from the literature without per-process calibration, and the PPO training budget is short. None of these undermines the framework, but each is a parameter that deployment on real hardware would require revisiting. Three priorities follow. First, validate the physics models against silicon measurements from at least one process node; even a coarse calibration would meaningfully sharpen the claims. Second, retrain PPO with $10^5$ timesteps on a GPU and re-report the numbers; the mean reward is expected to increase, but this cannot be confirmed from the current runs. Third, replace the activity-derived temperature proxy with a thermal simulator coupled into the data-generation loop.
+The biggest remaining uncertainty is how much of the predictor's accuracy survives contact with real silicon. The dataset is synthetic. The aging coefficients are taken from the literature without per-process calibration. The PPO budget is short. None of those break the framework, but each is something a real-world deployment would have to revisit. Three things would sharpen the work most. First, validate the physics models against silicon measurements from at least one process node; even a coarse calibration would meaningfully tighten the claims. Second, retrain PPO with $10^5$ timesteps on a GPU and re-report the numbers; we suspect the mean reward would climb noticeably, but cannot prove it from the current runs. Third, replace the activity-derived temperature proxy with a real thermal simulator coupled into the data-generation loop.
 
 The full code, training scripts, and figure-generation utilities are public.\footnote{\url{https://github.com/grizzleyyybear/adaptive-aging-aware-DNN}}
 
@@ -496,7 +496,7 @@ The full code, training scripts, and figure-generation utilities are public.\foo
 \section*{References}
 \label{sec:references}
 
-\noindent The bibliography below is annotated. Each entry includes a short note (in italics) describing what we drew from that work and where in our pipeline it appears.
+\noindent The bibliography below is annotated. Each entry has a short italicized note describing what we drew from that work and where it lands in our pipeline.
 
 \renewcommand{\refname}{}
 \bibliographystyle{IEEEtran}
