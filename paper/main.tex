@@ -14,10 +14,10 @@
 \usepackage{siunitx}
 \usepackage{cite}
 
-% Allow figures from both ../figures and ./output_figures
-% pdflatex picks .pdf > .png when no extension is given, so we prefer the
-% vector supplemental figures over the rasterized PNGs.
-\graphicspath{{../figures/}{output_figures/}{../}}
+% All paper assets (5 baseline PNGs + 6 supplemental PDF/PNG pairs) live in
+% paper/assets/. pdflatex prefers .pdf over .png when both are present, so the
+% supplemental figures render as vector graphics automatically.
+\graphicspath{{assets/}}
 
 \begin{document}
 
