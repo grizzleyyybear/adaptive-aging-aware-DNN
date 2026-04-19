@@ -495,6 +495,13 @@ What remains uncertain---and we want to be honest about this---is how much of th
 The full code, training scripts, and figure-generation utilities are public.\footnote{\url{https://github.com/grizzleyyybear/adaptive-aging-aware-DNN}}
 
 % ============================================================
+\clearpage
+\section*{References}
+\label{sec:references}
+
+\noindent The bibliography below is annotated. Each entry includes a short note (in italics) describing what we drew from that work and where in our pipeline it appears.
+
+\renewcommand{\refname}{}
 \bibliographystyle{IEEEtran}
 \begin{thebibliography}{12}
 
@@ -502,61 +509,73 @@ The full code, training scripts, and figure-generation utilities are public.\foo
 C.~Hill, S.~Rauch, and P.~Chaparala,
 ``CMOS reliability from past to future,''
 \emph{IEEE Trans. Device Mater. Rel.}, vol.~22, no.~3, pp.~291--302, Sep. 2022.
+\\\textit{Used as the source for the NBTI power-law form $\Delta V_{th} = A(\alpha t)^n$ and the TDDB Weibull formulation in Section~\ref{sec:aging_models}. We adopted the $n = 0.25$ time exponent and the qualitative ordering of NBTI/HCI/TDDB severity that motivates our $0.4/0.4/0.2$ weighting of the combined aging score.}
 
 \bibitem{kim2023reliability}
 Y.-H.~Kim \emph{et al.},
 ``Reliability assessment of 3-nm gate-all-around logic devices with comprehensive BTI, HCI, and TDDB characterization,''
 in \emph{Proc. IEEE Int. Rel. Phys. Symp. (IRPS)}, Mar. 2023, pp.~1--7.
+\\\textit{Source for the HCI $\sqrt{t}$ dependence and the order-of-magnitude on the degradation coefficient $B \sim 10^{-4}$ used in Eq.~\ref{eq:hci}. Also informs the temperature-acceleration intuition behind our temperature-proxy feature $x_4$.}
 
 \bibitem{bu2024multiview}
 L.~Bu, W.~Wen, Y.~Shi, and J.~Hu,
 ``Multi-view graph learning for aging timing prediction of silicon lifecycle management,''
 \emph{Electronics}, vol.~13, no.~4, p.~782, Feb. 2024.
+\\\textit{Strongest published baseline for graph-based aging prediction (STTN-GAT, $R^2 = 0.981$ at circuit-path level). We compare against it directly in Table~\ref{tab:predictor_comparison} and Fig.~\ref{fig:predictor}, and explicitly discuss the granularity gap (path-level vs. component-level) that distinguishes our task from theirs.}
 
 \bibitem{ebrahimipour2020aadam}
 M.~Ebrahimipour, S.~Ghavami, and H.~Sanchez,
 ``AaDaM: Aging-aware cell delay model via feed-forward neural network,''
 in \emph{Proc. IEEE/ACM Int. Conf. Comput.-Aided Design (ICCAD)}, Nov. 2020, pp.~1--9.
+\\\textit{Cell-level baseline ($R^2 \approx 0.72$) included in Table~\ref{tab:predictor_comparison} as the lowest published anchor. Demonstrates the limit of feedforward (non-graph) modelling, motivating the GCN/GAT/Transformer stack we present in Section~\ref{sec:model}.}
 
 \bibitem{alrahis2022gnn4rel}
 L.~Alrahis, J.~Knechtel, and O.~Sinanoglu,
 ``GNN4REL: Graph neural networks for predicting circuit reliability degradation,''
 \emph{IEEE Trans. Comput.-Aided Design Integr. Circuits Syst.}, vol.~41, no.~11, pp.~3826--3837, Nov. 2022.
+\\\textit{Mid-range graph baseline (PNA aggregation, $R^2 \approx 0.89$). Compared in Table~\ref{tab:predictor_comparison}; informed our decision to add the GAT layer (Section~\ref{sec:model}) for neighbour-importance weighting on top of plain message passing.}
 
 \bibitem{deb2002nsga}
 K.~Deb, A.~Pratap, S.~Agarwal, and T.~Meyarivan,
 ``A fast and elitist multiobjective genetic algorithm: NSGA-II,''
 \emph{IEEE Trans. Evol. Comput.}, vol.~6, no.~2, pp.~182--197, Apr. 2002.
+\\\textit{Core algorithm for our workload-mapping optimizer in Section~\ref{sec:nsga} and Algorithm~\ref{alg:nsga}. We implement standard non-dominated sorting and crowding distance, and add three modifications: SHA-1 evaluation cache, hypervolume-based early stopping, and a four-strategy diverse seeding to compensate for our small $N_{\text{pop}}=20$.}
 
 \bibitem{schulman2017ppo}
 J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford, and O.~Klimov,
 ``Proximal policy optimization algorithms,''
 \emph{arXiv preprint arXiv:1707.06347}, Jul. 2017.
+\\\textit{Algorithmic basis for our runtime controller (Section~\ref{sec:ppo}). We use the clipped-surrogate variant with GAE and add early-stop on KL divergence ($\text{KL} > 1.5 \times 0.03$), double-clipped value loss, and entropy annealing $0.01 \to 0.001$ to handle the non-stationarity introduced by the agent's own actions.}
 
 \bibitem{das2016recent}
 S.~Das, A.~Abraham, and A.~Konar,
 ``Recent advances in differential evolution---an updated survey,''
 \emph{Swarm Evol. Comput.}, vol.~27, pp.~1--30, Apr. 2016.
+\\\textit{Reference survey we consulted when deciding between NSGA-II and DE for the mapping problem. Justifies the brief discussion in Section~\ref{sec:related} of why DE was tried but ultimately discarded due to integer-rounding repair brittleness.}
 
 \bibitem{ikushima2021de}
 K.~Ikushima and T.~Yoshida,
 ``Differential evolution with individual-dependent mechanism,''
 in \emph{Proc. IEEE Congr. Evol. Comput. (CEC)}, Jun. 2021, pp.~757--764.
+\\\textit{Recent DE variant with adaptive operator selection. Cited in Section~\ref{sec:related} alongside~\cite{das2016recent,storn1997de} to show the alternative evolutionary path; we did not adopt it, but it informs the design space we considered.}
 
 \bibitem{storn1997de}
 R.~Storn and K.~Price,
 ``Differential evolution---a simple and efficient heuristic for global optimization over continuous spaces,''
 \emph{J. Global Optim.}, vol.~11, no.~4, pp.~341--359, Dec. 1997.
+\\\textit{Original DE paper, cited as the foundation of the line of work compared in Section~\ref{sec:related}. Its continuous-domain orientation is the reason we preferred NSGA-II for our discrete integer-chromosome mapping problem.}
 
 \bibitem{kipf2017gcn}
 T.~N.~Kipf and M.~Welling,
 ``Semi-supervised classification with graph convolutional networks,''
 in \emph{Proc. Int. Conf. Learn. Representations (ICLR)}, Apr. 2017.
+\\\textit{Source of the GCN layer used as the first three encoder blocks in our predictor (Section~\ref{sec:model}). We add residual connections and batch normalization on top of the standard formulation to stabilize gradient flow through the depth.}
 
 \bibitem{velickovic2018gat}
 P.~Veli\v{c}kovi\'{c}, G.~Cucurull, A.~Casanova, A.~Romero, P.~Li\`{o}, and Y.~Bengio,
 ``Graph attention networks,''
 in \emph{Proc. Int. Conf. Learn. Representations (ICLR)}, May 2018.
+\\\textit{Source of the multi-head GAT layer (4 heads in our case) sandwiched between the GCN stack and the Transformer encoder in Section~\ref{sec:model}. Empirically the largest single-block contributor to $R^2$ in the ablation (Table~\ref{tab:ablation}, +0.051), because attention-weighted aggregation captures the SRAM-vs-router asymmetry that uniform GCN aggregation cannot.}
 
 \end{thebibliography}
 
