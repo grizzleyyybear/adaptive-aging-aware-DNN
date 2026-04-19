@@ -37,3 +37,7 @@ Thumbs.db
 # ── Secrets / wandb ───────────────────────────────────────────────────────────
 .env
 wandb/
+
+# Reference draft PDFs (AI-generated starting points, not part of repo)
+Aging_Aware_DNN_*.pdf
+
