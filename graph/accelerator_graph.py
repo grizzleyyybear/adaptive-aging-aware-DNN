@@ -113,7 +113,24 @@ class AcceleratorGraph:
 
     def update_node_features(self, activity_dict: dict) -> None:
         """Updates internal graph structure with raw simulation values. Optional helper."""
-        pass # The prompt specified using FeatureBuilder for arrays
+        if not self.graph.nodes:
+            self.build()
+
+        aliases = {
+            "mac": ("mac_utilization", "switching_activity"),
+            "sram": ("sram_access_rate", "switching_activity"),
+            "router": ("noc_traffic", "switching_activity"),
+        }
+        for node_id, info in self.node_info.items():
+            node_type = info["type"]
+            local_idx = int(info["local_idx"])
+            for key in aliases.get(node_type, ()):
+                values = activity_dict.get(key)
+                if values is None or len(values) == 0:
+                    continue
+                arr = np.asarray(values, dtype=np.float32).reshape(-1)
+                self.graph.nodes[node_id]["activity"] = float(arr[min(local_idx, len(arr) - 1)])
+                break
 
     def get_aging_vector(self) -> np.ndarray:
         """

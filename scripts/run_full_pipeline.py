@@ -4,6 +4,7 @@ import json
 import logging
 import shutil
 import sys
+import argparse
 from pathlib import Path
 from typing import Dict
 
@@ -11,7 +12,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import hydra
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -51,6 +51,40 @@ def set_seed(seed: int) -> None:
 def _ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _cfg_path(value, default: Path) -> Path:
+    path = Path(str(value)) if value is not None else default
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def load_config(argv: list[str] | None = None) -> DictConfig:
+    parser = argparse.ArgumentParser(description="Run the aging-aware DNN pipeline")
+    parser.add_argument("--config-dir", default=str(REPO_ROOT / "configs"))
+    parser.add_argument("--config-name", default="experiments")
+    args, overrides = parser.parse_known_args(argv)
+
+    config_dir = Path(args.config_dir)
+    config_name = args.config_name
+    config_path = config_dir / (config_name if config_name.endswith((".yaml", ".yml")) else f"{config_name}.yaml")
+    base = OmegaConf.load(config_path)
+
+    fragments = []
+    for entry in base.get("defaults", []):
+        if entry == "_self_":
+            continue
+        if isinstance(entry, str):
+            fragments.append(OmegaConf.load(config_dir / f"{entry}.yaml"))
+        elif isinstance(entry, dict):
+            for _, value in entry.items():
+                if value not in (None, "_self_"):
+                    fragments.append(OmegaConf.load(config_dir / f"{value}.yaml"))
+
+    cfg = OmegaConf.merge(*fragments, base) if fragments else base
+    if overrides:
+        cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(overrides))
+    OmegaConf.resolve(cfg)
+    return cfg
 
 
 def _mirror_file(src: Path, dst: Path) -> None:
@@ -207,14 +241,15 @@ def generate_all_figures(
     _mirror_file(lifetime_path, output_dirs["paper_plots"] / "lifetime_improvement_bar.pdf")
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="experiments")
-def main(cfg: DictConfig) -> None:
+def run_pipeline(cfg: DictConfig) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     set_seed(int(cfg.get("seed", 42)))
     runtime_device = resolve_device(get_device_request(cfg))
     configure_torch_runtime(runtime_device)
     log.info("Runtime device: %s", describe_device(runtime_device))
     output_dirs = _get_output_dirs(cfg)
+    checkpoint_dir = _ensure_dir(_cfg_path(cfg.get("checkpoint_dir", None), output_dirs["output_models"]))
+    mirror_checkpoints = bool(cfg.get("mirror_checkpoints", True))
 
     use_wandb = bool(cfg.get("use_wandb", False))
     if use_wandb:
@@ -248,8 +283,12 @@ def main(cfg: DictConfig) -> None:
         transformer_heads=int(cfg.model.transformer_heads),
         seq_len=horizon,
     )
-    pred_pipeline = TrainingPipeline(cfg, predictor, dataset)
+    pred_pipeline = TrainingPipeline(cfg, predictor, dataset, checkpoint_dir=checkpoint_dir)
     pred_metrics = pred_pipeline.train()
+    checkpoints_dir = _ensure_dir(REPO_ROOT / "checkpoints")
+    if mirror_checkpoints:
+        _mirror_file(checkpoint_dir / "predictor_best.pt", checkpoints_dir / "predictor_best.pt")
+        _mirror_file(checkpoint_dir / "predictor_last.pt", checkpoints_dir / "predictor_last.pt")
     torch.save(predictor.state_dict(), output_dirs["output_models"] / "hybrid_gnn_transformer.pt")
 
     trajectory_predictor = TrajectoryPredictor(
@@ -258,9 +297,13 @@ def main(cfg: DictConfig) -> None:
         horizon=horizon,
         gamma=float(cfg.training.discount_factor),
     )
-    traj_pipeline = TrainingPipeline(cfg, trajectory_predictor, dataset)
+    traj_pipeline = TrainingPipeline(cfg, trajectory_predictor, dataset, checkpoint_dir=checkpoint_dir)
     traj_metrics = traj_pipeline.train()
-    torch.save(trajectory_predictor.state_dict(), output_dirs["output_models"] / "trajectory_predictor.pt")
+    if mirror_checkpoints:
+        _mirror_file(checkpoint_dir / "trajectory_best.pt", checkpoints_dir / "trajectory_best.pt")
+        _mirror_file(checkpoint_dir / "trajectory_last.pt", checkpoints_dir / "trajectory_last.pt")
+    trajectory_path = output_dirs["output_models"] / "trajectory_predictor.pt"
+    torch.save(trajectory_predictor.state_dict(), trajectory_path)
 
     simulator = TimeloopRunner(accelerator_cfg)
     planner = LifetimePlanner(graph, cfg.planning)
@@ -296,7 +339,10 @@ def main(cfg: DictConfig) -> None:
     )
     rl_trainer = PPOTrainer(env, policy, ppo_cfg)
     rl_metrics = rl_trainer.train(total_timesteps=int(cfg.ppo.total_timesteps))
-    torch.save(policy.state_dict(), output_dirs["output_models"] / "rl_policy_final.pt")
+    policy_path = output_dirs["output_models"] / "rl_policy_final.pt"
+    torch.save(policy.state_dict(), policy_path)
+    if mirror_checkpoints:
+        _mirror_file(policy_path, checkpoints_dir / "rl_policy_final.pt")
 
     baselines = run_all_baselines(cfg, simulator, graph)
     eval_results = run_full_evaluation(cfg, rl_metrics, pareto, baselines)
@@ -333,6 +379,10 @@ def main(cfg: DictConfig) -> None:
     log.info("Pipeline finished successfully. Artifacts written to %s", output_dirs["output_root"])
     if use_wandb:
         wandb.finish()
+
+
+def main(argv: list[str] | None = None) -> None:
+    run_pipeline(load_config(argv))
 
 
 if __name__ == "__main__":

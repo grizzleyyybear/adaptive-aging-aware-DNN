@@ -1,0 +1,14 @@
+metric,value
+dataset_size,1500
+predictor_r2,0.9957
+predictor_mae,0.0055
+predictor_rmse,0.0090
+trajectory_r2,0.9474
+trajectory_mae,0.0342
+trajectory_rmse,0.0482
+total_pareto_solutions,96
+best_nsga_reduction_percent,24.46
+ppo_first_reward,0.6634
+ppo_last_reward,0.9299
+ppo_best_reward,1.1011
+ppo_mean_reward,0.7773

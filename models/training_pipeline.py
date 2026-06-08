@@ -14,6 +14,7 @@ from utils.device import (
     dataloader_kwargs,
     describe_device,
     get_device_request,
+    is_low_vram_cuda,
     resolve_device,
     use_non_blocking,
 )
@@ -43,6 +44,9 @@ class TrainingPipeline:
         self.lr = train_cfg.get('learning_rate', train_cfg.get('lr', 1e-3))
         self.patience = train_cfg.get('patience', 10)
         self.weight_decay = train_cfg.get('weight_decay', 1e-4)
+        if is_low_vram_cuda(self.device):
+            low_vram_batch = int(train_cfg.get('low_vram_batch_size', 16))
+            self.batch_size = min(int(self.batch_size), low_vram_batch)
         
         # We need a proper Train/Val/Test split since the base dataset object doesn't do it automatically
         total_len = len(dataset)

@@ -43,6 +43,18 @@ def resolve_device(request: str | None = None) -> torch.device:
     return torch.device(normalized)
 
 
+def cuda_total_memory_mib(device: torch.device | str | None = None) -> int:
+    if not torch.cuda.is_available():
+        return 0
+    cuda_device = torch.device(device or "cuda")
+    index = cuda_device.index if cuda_device.index is not None else torch.cuda.current_device()
+    return int(torch.cuda.get_device_properties(index).total_memory // (1024 * 1024))
+
+
+def is_low_vram_cuda(device: torch.device, threshold_mib: int = 4608) -> bool:
+    return device.type == "cuda" and 0 < cuda_total_memory_mib(device) <= threshold_mib
+
+
 def configure_torch_runtime(device: torch.device) -> None:
     """Enable the common fast paths once CUDA is active."""
     if device.type != "cuda":
@@ -64,7 +76,7 @@ def dataloader_kwargs(device: torch.device) -> dict:
     """Pick sensible DataLoader settings for the active device."""
     use_cuda = device.type == "cuda"
     cpu_count = os.cpu_count() or 1
-    num_workers = min(2, cpu_count) if use_cuda else 0
+    num_workers = 0 if (use_cuda and is_low_vram_cuda(device)) else (min(2, cpu_count) if use_cuda else 0)
 
     kwargs = {
         "num_workers": num_workers,
@@ -84,6 +96,6 @@ def describe_device(device: torch.device) -> str:
         return "cpu"
 
     try:
-        return f"{device} ({torch.cuda.get_device_name(device)})"
+        return f"{device} ({torch.cuda.get_device_name(device)}, {cuda_total_memory_mib(device)} MiB)"
     except Exception:
         return str(device)

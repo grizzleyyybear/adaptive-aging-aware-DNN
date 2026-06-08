@@ -27,6 +27,21 @@ ABLATION_CONFIGS = [
 ]
 
 
+def _path_from_cfg(value: Any, default: str) -> Path:
+    return Path(str(value if value is not None else default))
+
+
+def _predictor_checkpoint_candidates(cfg: Any) -> list[Path]:
+    checkpoint_dir = _path_from_cfg(cfg_get(cfg, "checkpoint_dir", "checkpoints"), "checkpoints")
+    output_dir = _path_from_cfg(cfg_get(cfg, "output_dir", "outputs"), "outputs")
+    return [
+        checkpoint_dir / "predictor_best.pt",
+        checkpoint_dir / "predictor_last.pt",
+        output_dir / "models" / "hybrid_gnn_transformer.pt",
+        Path("checkpoints") / "predictor_best.pt",
+    ]
+
+
 def _evaluate_predictor(model: HybridGNNTransformer, loader: DataLoader, device: torch.device) -> tuple[float, float]:
     preds = []
     labels = []
@@ -61,7 +76,10 @@ def _component_model(cfg: Any, components: tuple[str, ...], device: torch.device
 
 
 def run_ablation_studies(cfg, all_components: dict) -> pd.DataFrame:
-    predictor, device, checkpoint = load_pretrained_predictor(cfg)
+    predictor, device, checkpoint = load_pretrained_predictor(
+        cfg,
+        checkpoint_candidates=_predictor_checkpoint_candidates(cfg),
+    )
     state_dict = predictor.state_dict()
 
     dataset_root = str(cfg_get(cfg_get(cfg, "dataset", {}), "root", "data"))

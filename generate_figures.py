@@ -7,12 +7,19 @@ Outputs: figures/ directory with all PNG plots.
 """
 from __future__ import annotations
 import json
+import shutil
 from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent
 FIG_DIR = REPO / "figures"
 FIG_DIR.mkdir(exist_ok=True)
+PAPER_ASSET_DIR = REPO / "paper" / "assets"
+OUTPUT_TABLE_DIR = REPO / "outputs" / "tables"
+PAPER_TABLE_DIR = REPO / "paper" / "tables"
+PAPER_ASSET_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_TABLE_DIR.mkdir(parents=True, exist_ok=True)
+PAPER_TABLE_DIR.mkdir(parents=True, exist_ok=True)
 
 import matplotlib
 matplotlib.use("Agg")
@@ -53,6 +60,11 @@ COLORS = {
     "ablation": "#56b4e9",
 }
 
+
+def _mirror(path: Path, target_dir: Path) -> None:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, target_dir / path.name)
+
 plt.rcParams.update({
     "font.family": "DejaVu Sans",
     "axes.spines.top": False,
@@ -83,8 +95,10 @@ def fig_predictor_vs_baselines():
              "This work predicts component-level aging [0,1] — harder task.",
              fontsize=7.5, color="gray")
     plt.tight_layout(rect=[0, 0.06, 1, 1])
-    fig.savefig(FIG_DIR / "01_predictor_vs_baselines.png", bbox_inches="tight")
+    path = FIG_DIR / "01_predictor_vs_baselines.png"
+    fig.savefig(path, bbox_inches="tight")
     plt.close()
+    _mirror(path, PAPER_ASSET_DIR)
     print("  saved: 01_predictor_vs_baselines.png")
 
 
@@ -108,8 +122,10 @@ def fig_ablation():
                     ha="center", va="top", fontsize=8, color="green")
         prev = v
     plt.tight_layout()
-    fig.savefig(FIG_DIR / "02_ablation.png", bbox_inches="tight")
+    path = FIG_DIR / "02_ablation.png"
+    fig.savefig(path, bbox_inches="tight")
     plt.close()
+    _mirror(path, PAPER_ASSET_DIR)
     print("  saved: 02_ablation.png")
 
 
@@ -144,8 +160,10 @@ def fig_nsga2():
     fig.suptitle(f"NSGA-II Multi-Objective Optimization  |  {total_p} total Pareto solutions  |  {total_ch} cache hits",
                  fontsize=10, color="gray")
     plt.tight_layout()
-    fig.savefig(FIG_DIR / "03_nsga2.png", bbox_inches="tight")
+    path = FIG_DIR / "03_nsga2.png"
+    fig.savefig(path, bbox_inches="tight")
     plt.close()
+    _mirror(path, PAPER_ASSET_DIR)
     print("  saved: 03_nsga2.png")
 
 
@@ -168,8 +186,10 @@ def fig_ppo():
     ax.set_title(f"PPO Runtime Controller: Training Reward Curve\n{stats}", fontsize=10, fontweight="bold")
     ax.legend(fontsize=9)
     plt.tight_layout()
-    fig.savefig(FIG_DIR / "04_ppo_reward.png", bbox_inches="tight")
+    path = FIG_DIR / "04_ppo_reward.png"
+    fig.savefig(path, bbox_inches="tight")
     plt.close()
+    _mirror(path, PAPER_ASSET_DIR)
     print("  saved: 04_ppo_reward.png")
 
 
@@ -251,9 +271,108 @@ def fig_summary():
         f"Hybrid GNN-Transformer (R²={PRED['r2']:.4f}) + NSGA-II + PPO",
         fontsize=12, fontweight="bold",
     )
-    fig.savefig(FIG_DIR / "00_summary.png", bbox_inches="tight", dpi=150)
+    path = FIG_DIR / "00_summary.png"
+    fig.savefig(path, bbox_inches="tight", dpi=150)
     plt.close()
+    _mirror(path, PAPER_ASSET_DIR)
     print("  saved: 00_summary.png")
+
+
+def write_table(path: Path, rows: list[dict], headers: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        f.write(",".join(headers) + "\n")
+        for row in rows:
+            f.write(",".join(str(row[h]) for h in headers) + "\n")
+    _mirror(path, PAPER_TABLE_DIR)
+
+
+def write_tex_table(path: Path, caption: str, label: str, headers: list[str], rows: list[list[str]]) -> None:
+    align = "l" + "r" * (len(headers) - 1)
+    lines = [
+        "\\begin{table}[t]",
+        "\\centering",
+        f"\\caption{{{caption}}}",
+        f"\\label{{{label}}}",
+        f"\\begin{{tabular}}{{{align}}}",
+        "\\toprule",
+        " & ".join(headers) + r" \\",
+        "\\midrule",
+    ]
+    lines.extend(" & ".join(row) + r" \\" for row in rows)
+    lines.extend(["\\bottomrule", "\\end{tabular}", "\\end{table}", ""])
+    path.write_text("\n".join(lines), encoding="utf-8")
+    _mirror(path, PAPER_TABLE_DIR)
+
+
+def generate_tables():
+    nsga_rows = []
+    for workload, metrics in NSGA.items():
+        nsga_rows.append({
+            "workload": workload,
+            "pareto_solutions": metrics["count"],
+            "initial_peak_aging": f"{metrics['init']:.4f}",
+            "best_peak_aging": f"{metrics['best']:.4f}",
+            "peak_reduction_percent": f"{metrics['reduction']:.2f}",
+            "cache_hits": metrics["cache_hits"],
+            "converged_generation": metrics["converged_gen"],
+        })
+    write_table(
+        OUTPUT_TABLE_DIR / "nsga2_results.csv",
+        nsga_rows,
+        ["workload", "pareto_solutions", "initial_peak_aging", "best_peak_aging", "peak_reduction_percent", "cache_hits", "converged_generation"],
+    )
+
+    summary_rows = [
+        {"metric": "dataset_size", "value": R.get("dataset_size", "")},
+        {"metric": "predictor_r2", "value": f"{PRED['r2']:.4f}"},
+        {"metric": "predictor_mae", "value": f"{PRED['mae']:.4f}"},
+        {"metric": "predictor_rmse", "value": f"{PRED['rmse']:.4f}"},
+        {"metric": "trajectory_r2", "value": f"{TRAJ['r2']:.4f}"},
+        {"metric": "trajectory_mae", "value": f"{TRAJ['mae']:.4f}"},
+        {"metric": "trajectory_rmse", "value": f"{TRAJ['rmse']:.4f}"},
+        {"metric": "total_pareto_solutions", "value": sum(item["count"] for item in NSGA.values())},
+        {"metric": "best_nsga_reduction_percent", "value": f"{max(item['reduction'] for item in NSGA.values()):.2f}"},
+        {"metric": "ppo_first_reward", "value": f"{PPO['first']:.4f}"},
+        {"metric": "ppo_last_reward", "value": f"{PPO['last']:.4f}"},
+        {"metric": "ppo_best_reward", "value": f"{PPO['best']:.4f}"},
+        {"metric": "ppo_mean_reward", "value": f"{PPO['mean']:.4f}"},
+    ]
+    write_table(OUTPUT_TABLE_DIR / "results_summary.csv", summary_rows, ["metric", "value"])
+
+    ppo_rows = [{"iteration": i + 1, "reward": f"{reward:.6f}"} for i, reward in enumerate(PPO["rewards"])]
+    write_table(OUTPUT_TABLE_DIR / "ppo_rewards.csv", ppo_rows, ["iteration", "reward"])
+
+    write_tex_table(
+        OUTPUT_TABLE_DIR / "prediction_metrics.tex",
+        "Aging prediction and trajectory forecasting results.",
+        "tab:prediction-metrics",
+        ["Model", "R2", "MAE", "RMSE"],
+        [
+            ["Aging predictor", f"{PRED['r2']:.4f}", f"{PRED['mae']:.4f}", f"{PRED['rmse']:.4f}"],
+            ["Trajectory predictor", f"{TRAJ['r2']:.4f}", f"{TRAJ['mae']:.4f}", f"{TRAJ['rmse']:.4f}"],
+        ],
+    )
+    write_tex_table(
+        OUTPUT_TABLE_DIR / "nsga2_results.tex",
+        "NSGA-II workload mapping results by workload.",
+        "tab:nsga2-results",
+        ["Workload", "Pareto", "Initial", "Best", "Reduction"],
+        [[row["workload"], str(row["pareto_solutions"]), row["initial_peak_aging"], row["best_peak_aging"], row["peak_reduction_percent"] + "\\%"] for row in nsga_rows],
+    )
+    write_tex_table(
+        OUTPUT_TABLE_DIR / "ppo_summary.tex",
+        "PPO runtime controller reward summary.",
+        "tab:ppo-summary",
+        ["Metric", "Value"],
+        [
+            ["First reward", f"{PPO['first']:.4f}"],
+            ["Last reward", f"{PPO['last']:.4f}"],
+            ["Best reward", f"{PPO['best']:.4f}"],
+            ["Mean reward", f"{PPO['mean']:.4f}"],
+        ],
+    )
+    print(f"  tables: {OUTPUT_TABLE_DIR.relative_to(REPO)} -> {PAPER_TABLE_DIR.relative_to(REPO)}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -266,4 +385,5 @@ if __name__ == "__main__":
     fig_nsga2()
     fig_ppo()
     fig_summary()
+    generate_tables()
     print(f"\nDone. {len(list(FIG_DIR.glob('*.png')))} figures saved to figures/\n")

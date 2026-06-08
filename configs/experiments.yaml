@@ -69,7 +69,3 @@ experiments:
 
   - name: "lifetime_improvement"
     description: "Demonstrate time-to-failure extension vs baselines"
-
-hydra:
-  job:
-    chdir: false

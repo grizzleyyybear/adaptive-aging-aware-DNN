@@ -120,7 +120,7 @@ class PPOTrainer:
             "entropy": [], "approx_kl": [], "learning_rate": [],
         }
 
-        checkpoint_dir = Path("checkpoints")
+        checkpoint_dir = Path(str(_cfg_get(self.config, "checkpoint_dir", "checkpoints")))
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         final_path = checkpoint_dir / "rl_policy_final.pt"
         best_path = checkpoint_dir / "rl_policy_best.pt"

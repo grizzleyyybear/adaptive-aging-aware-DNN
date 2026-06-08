@@ -1,0 +1,6 @@
+workload,pareto_solutions,initial_peak_aging,best_peak_aging,peak_reduction_percent,cache_hits,converged_generation
+ResNet-50,17,0.4898,0.4126,15.77,3,12
+BERT-Base,19,0.5608,0.4309,23.15,0,10
+MobileNetV2,20,0.4934,0.4173,15.44,7,20
+EfficientNet-B4,20,0.5395,0.4075,24.46,0,15
+ViT-B/16,20,0.5264,0.4342,17.51,2,19

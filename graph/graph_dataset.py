@@ -103,7 +103,7 @@ class AgingDataset(InMemoryDataset):
         return [f"aging_{self.split}_{self.size}_mac{n_mac}_feat{self.FEATURE_DIM}.pt"]
 
     def download(self) -> None:
-        pass  # Synthetic dataset — no download needed
+        return None
 
     def process(self) -> None:
         """

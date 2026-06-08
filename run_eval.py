@@ -16,14 +16,18 @@ Previous baseline results (from simulator-backed data):
 """
 from __future__ import annotations
 
+import os
 import json
 import sys
 import time
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 
 import numpy as np
 import torch
@@ -31,15 +35,43 @@ from omegaconf import OmegaConf
 
 # ── Detect mode ──────────────────────────────────────────────────────
 SMOKE_MODE = "--smoke" in sys.argv
+QUALITY_MODE = "--quality" in sys.argv
 PPO_ONLY   = "--ppo-only" in sys.argv
 NSGA_PPO_ONLY = ("--nsga-ppo-only" in sys.argv) or ("--opt-only" in sys.argv)
 # Optimization-only runs should default to full-sized NSGA/PPO unless the
 # user explicitly requests smoke mode.
 FULL_MODE  = ("--full" in sys.argv) or (NSGA_PPO_ONLY and not SMOKE_MODE)
+GPU_4GB_MODE = ("--gpu-4gb" in sys.argv) or ("--rtx3050" in sys.argv)
+ULTRA_LOW_VRAM = "--ultra-low-vram" in sys.argv
+
+_DEVICE_IDX = next((i for i, a in enumerate(sys.argv) if a == "--device"), None)
+DEVICE_OVERRIDE = sys.argv[_DEVICE_IDX + 1] if _DEVICE_IDX is not None and _DEVICE_IDX + 1 < len(sys.argv) else None
 
 # Optional: --ckpt-dir /path/to/dir
 _CKPT_IDX = next((i for i, a in enumerate(sys.argv) if a == "--ckpt-dir"), None)
 CKPT_DIR  = Path(sys.argv[_CKPT_IDX + 1]) if _CKPT_IDX is not None else (REPO_ROOT / "checkpoints")
+
+_RESULTS_IDX = next((i for i, a in enumerate(sys.argv) if a == "--results-path"), None)
+
+
+def _arg_value(name: str, default, cast):
+    idx = next((i for i, a in enumerate(sys.argv) if a == name), None)
+    if idx is None or idx + 1 >= len(sys.argv):
+        return default
+    return cast(sys.argv[idx + 1])
+
+
+def _cuda_total_mib() -> int:
+    if not torch.cuda.is_available():
+        return 0
+    return int(torch.cuda.get_device_properties(0).total_memory // (1024 * 1024))
+
+
+LOW_VRAM_GPU = GPU_4GB_MODE or ULTRA_LOW_VRAM or (torch.cuda.is_available() and 0 < _cuda_total_mib() <= 4608)
+TRAIN_BATCH_SIZE = 8 if ULTRA_LOW_VRAM else (16 if LOW_VRAM_GPU else 64)
+PPO_BATCH_SIZE = 8 if ULTRA_LOW_VRAM else (16 if LOW_VRAM_GPU else 32)
+PPO_STEPS_SAFE = 16 if ULTRA_LOW_VRAM else (32 if LOW_VRAM_GPU else 64)
+DEVICE = DEVICE_OVERRIDE or ("cuda" if torch.cuda.is_available() else "cpu")
 
 if FULL_MODE:
     DATASET_SIZE       = 40000
@@ -50,8 +82,17 @@ if FULL_MODE:
     NSGA_POP           = 20
     NSGA_GEN           = 20
     PPO_ITERS          = 40
-    PPO_STEPS          = 64
-    DEVICE             = "auto"
+    PPO_STEPS          = PPO_STEPS_SAFE
+elif QUALITY_MODE:
+    DATASET_SIZE       = 1000
+    PRED_EPOCHS        = 45
+    PRED_PATIENCE      = 12
+    TRAJ_EPOCHS        = 55
+    TRAJ_PATIENCE      = 14
+    NSGA_POP           = 16
+    NSGA_GEN           = 16
+    PPO_ITERS          = 25
+    PPO_STEPS          = PPO_STEPS_SAFE
 else:
     DATASET_SIZE       = 200
     PRED_EPOCHS        = 15
@@ -61,13 +102,22 @@ else:
     NSGA_POP           = 12
     NSGA_GEN           = 12
     PPO_ITERS          = 15
-    PPO_STEPS          = 32
-    DEVICE             = "auto"
+    PPO_STEPS          = min(32, PPO_STEPS_SAFE)
+
+DATASET_SIZE = _arg_value("--dataset-size", DATASET_SIZE, int)
+PRED_EPOCHS = _arg_value("--pred-epochs", PRED_EPOCHS, int)
+PRED_PATIENCE = _arg_value("--pred-patience", PRED_PATIENCE, int)
+TRAJ_EPOCHS = _arg_value("--traj-epochs", TRAJ_EPOCHS, int)
+TRAJ_PATIENCE = _arg_value("--traj-patience", TRAJ_PATIENCE, int)
+NSGA_POP = _arg_value("--nsga-pop", NSGA_POP, int)
+NSGA_GEN = _arg_value("--nsga-gen", NSGA_GEN, int)
+PPO_ITERS = _arg_value("--ppo-iters", PPO_ITERS, int)
+PPO_STEPS = _arg_value("--ppo-steps", PPO_STEPS, int)
 
 TRAIN_EPOCHS = PRED_EPOCHS  # kept for backward compat display
 
 SEP = "=" * 68
-RESULTS_PATH = REPO_ROOT / "eval_results.json"
+RESULTS_PATH = Path(sys.argv[_RESULTS_IDX + 1]) if _RESULTS_IDX is not None and _RESULTS_IDX + 1 < len(sys.argv) else (REPO_ROOT / "eval_results.json")
 
 
 def _default_metric_dict():
@@ -116,7 +166,8 @@ def build_config(epochs=None, patience=None):
             "prediction_horizon": 10,
         },
         "training": {
-            "epochs": ep, "batch_size": 64,
+            "epochs": ep, "batch_size": TRAIN_BATCH_SIZE,
+            "low_vram_batch_size": TRAIN_BATCH_SIZE,
             "learning_rate": 1e-4, "weight_decay": 1e-5,
             "patience": pt,
         },
@@ -135,9 +186,12 @@ def build_config(epochs=None, patience=None):
 
 
 def main():
-    mode_label = "FULL" if FULL_MODE else "SMOKE"
+    mode_label = "FULL" if FULL_MODE else ("QUALITY" if QUALITY_MODE else "SMOKE")
     print(f"\n{SEP}")
     print(f"  PIPELINE EVALUATION [{mode_label}]  —  device={DEVICE}")
+    if torch.cuda.is_available():
+        profile = "ultra-low-vram" if ULTRA_LOW_VRAM else ("4gb-safe" if LOW_VRAM_GPU else "standard")
+        print(f"  GPU: {torch.cuda.get_device_name(0)} ({_cuda_total_mib()} MiB)  |  profile={profile}  |  batch={TRAIN_BATCH_SIZE}")
     print(SEP)
 
     pred_cfg = build_config(epochs=PRED_EPOCHS, patience=PRED_PATIENCE)
@@ -321,7 +375,7 @@ def main():
     policy  = ActorCritic(obs_dim=obs_dim, action_dim=5, hidden_dim=128)
     ppo_cfg = OmegaConf.create({
         "n_iterations": PPO_ITERS, "n_steps": PPO_STEPS,
-        "batch_size": 32, "n_epochs": 4,
+        "batch_size": PPO_BATCH_SIZE, "n_epochs": 4,
         "gamma": 0.99, "gae_lambda": 0.95,
         "clip_range": 0.2, "ent_coef": 0.01, "vf_coef": 0.5,
         "max_grad_norm": 0.5, "learning_rate": 3e-4,
@@ -330,6 +384,7 @@ def main():
         "clip_range_vf": 0.2, "ent_coef_end": 0.001,
         "eval_interval": max(PPO_ITERS // 3, 1), "eval_episodes": 3,
         "device": DEVICE,
+        "checkpoint_dir": str(CKPT_DIR),
     })
     rl_metrics = PPOTrainer(env, policy, ppo_cfg).train()
     rewards = rl_metrics["reward"]
@@ -424,4 +479,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        is_cuda_oom = "cuda" in message and ("out of memory" in message or "cublas" in message)
+        if is_cuda_oom and "--ultra-low-vram" not in sys.argv:
+            print("\nCUDA memory pressure detected; retrying once with --ultra-low-vram.", flush=True)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            retry_args = [arg for arg in sys.argv if arg not in ("--gpu-4gb", "--rtx3050")]
+            retry_args.append("--ultra-low-vram")
+            completed = subprocess.run([sys.executable, *retry_args])
+            raise SystemExit(completed.returncode)
+        raise
