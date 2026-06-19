@@ -133,45 +133,45 @@ python generate_figures.py
 
 ## Running on PARAM (A100 / SLURM)
 
-SLURM job scripts and helpers are in `scripts/`:
+SLURM job scripts and helpers are in `scripts/`. The `.slurm` files are
+pre-configured for **CDAC PARAM Siddhi-AI** (DGX-A100, partition `dgxnp`,
+GRES `gpu:A100-SXM4`, 16 CPUs/GPU per advisory A6, no `--account` needed).
 
 | Script | Purpose |
 |---|---|
 | `scripts/param_setup_env.sh` | One-time env setup on a login node (CUDA PyTorch, PyG, requirements, tests) |
-| `scripts/param_discover.sh` | Print this site's GPU partitions + your account, then the exact `sbatch` command |
+| `scripts/param_discover.sh` | Print a site's GPU partitions + your account (for non-Siddhi PARAM sites) |
 | `scripts/param_a100_full.slurm` | Standard full benchmark (40k synthetic samples) on 1x A100 |
 | `scripts/param_a100_enhanced.slurm` | Enhanced run (100k samples, larger NSGA/PPO, 14nm aging preset) |
 | `scripts/param_collect_artifacts.sh` | Bundle results/figures/tables/checkpoints into a tarball |
 
-Step by step from the repo root on PARAM:
+Step by step from the repo root on PARAM Siddhi-AI:
 
 ```bash
 # 0. Clone and enter the repo
 git clone https://github.com/grizzleyyybear/adaptive-aging-aware-DNN.git
 cd adaptive-aging-aware-DNN
 
-# 1. One-time environment setup on a LOGIN node.
-#    Adjust module names for your site if needed:
-#    PARAM_PYTHON_MODULE=python/3.10.x PARAM_CUDA_MODULE=cuda/12.1 bash scripts/param_setup_env.sh
+# 1. One-time environment setup on a LOGIN node (Siddhi has no ML module
+#    subsystem; the script falls back to system Python + pip CUDA wheels):
 bash scripts/param_setup_env.sh
 
-# 2a. Discover this site's GPU partition + your account (partition names
-#     vary per PARAM site; "gpu" may not exist):
-bash scripts/param_discover.sh
+# 2. Submit the standard full benchmark (partition/GRES already set for Siddhi):
+sbatch scripts/param_a100_full.slurm
 
-# 2b. Submit the standard full benchmark, passing partition+account on the CLI
-#     (these override the #SBATCH defaults, so you do NOT need to edit the file):
-sbatch --partition=<PART> --account=<ACCT> scripts/param_a100_full.slurm
-
-# 2c. Or submit the enhanced research run
-sbatch --partition=<PART> --account=<ACCT> scripts/param_a100_enhanced.slurm
+# 2b. Or submit the enhanced research run
+sbatch scripts/param_a100_enhanced.slurm
 
 # To use imported public workload + Timeloop/Accelergy traces in the enhanced run,
 # replace the tiny example files, then submit with:
 #   USE_IMPORTED_TRACES=1 \
 #   WORKLOAD_FILE=data/workloads/<full>.yaml \
 #   ACTIVITY_FILE=data/activity_traces/<traces>.json \
-#   sbatch --partition=<PART> --account=<ACCT> scripts/param_a100_enhanced.slurm
+#   sbatch scripts/param_a100_enhanced.slurm
+
+# On a DIFFERENT PARAM site? Find the partition/account first, then override:
+#   bash scripts/param_discover.sh
+#   sbatch --partition=<PART> --gres=gpu:1 scripts/param_a100_full.slurm
 
 # 3. Monitor
 squeue -u "$USER"

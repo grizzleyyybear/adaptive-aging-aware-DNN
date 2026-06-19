@@ -1,24 +1,25 @@
 #!/bin/bash
 #SBATCH --job-name=aging-full
-##SBATCH --partition=CHANGE_ME           # set via: sbatch --partition=<PART> ...
-##SBATCH --account=CHANGE_ME             # set via: sbatch --account=<ACCT> ...
-#SBATCH --gres=gpu:1                    # 1x A100 is sufficient (pipeline is single-GPU)
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=48G
+#SBATCH --partition=dgxnp              # PARAM Siddhi-AI A100 partition (advisory A1)
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=16          # advisory A6: 16 CPUs per A100
+#SBATCH --gres=gpu:A100-SXM4:1        # Siddhi GRES name; generic gpu:1 also works
 #SBATCH --time=04:00:00
 #SBATCH --output=runs/full_%j.out
 #SBATCH --error=runs/full_%j.err
 #
 # Standard full benchmark on a single A100 (synthetic dataset, 40k samples).
-# First discover your partition/account:  bash scripts/param_discover.sh
-# Then submit from the repo root, passing them on the CLI (overrides #SBATCH):
-#   sbatch --partition=<PART> --account=<ACCT> scripts/param_a100_full.slurm
+# Verified for CDAC PARAM Siddhi-AI (DGX-A100, 40GB). Submit from repo root:
+#   sbatch scripts/param_a100_full.slurm
+# Different site/partition? Override on the CLI (no need to edit this file):
+#   sbatch --partition=<PART> --gres=gpu:1 scripts/param_a100_full.slurm
 set -euo pipefail
 
 ENV_DIR="${PARAM_ENV_DIR:-$HOME/envs/aging-aware-dnn}"
 PYTHON_MODULE="${PARAM_PYTHON_MODULE:-python/3.10}"
 CUDA_MODULE="${PARAM_CUDA_MODULE:-cuda/12.1}"
 
+export OMP_NUM_THREADS="${SLURM_NTASKS_PER_NODE:-16}"
 mkdir -p runs
 module purge 2>/dev/null || true
 module load "$PYTHON_MODULE" 2>/dev/null || true

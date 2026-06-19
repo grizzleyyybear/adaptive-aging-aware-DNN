@@ -1,0 +1,4 @@
+# Force LF endings for shell + SLURM scripts so they run on Linux/PARAM
+# (CRLF causes "Batch script contains DOS line breaks" on sbatch).
+*.sh    text eol=lf
+*.slurm text eol=lf

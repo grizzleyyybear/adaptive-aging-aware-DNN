@@ -1,10 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=aging-enh
-##SBATCH --partition=CHANGE_ME           # set via: sbatch --partition=<PART> ...
-##SBATCH --account=CHANGE_ME             # set via: sbatch --account=<ACCT> ...
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=12
-#SBATCH --mem=96G
+#SBATCH --partition=dgxnp              # PARAM Siddhi-AI A100 partition (advisory A1)
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=16          # advisory A6: 16 CPUs per A100
+#SBATCH --gres=gpu:A100-SXM4:1        # Siddhi GRES name; generic gpu:1 also works
 #SBATCH --time=12:00:00
 #SBATCH --output=runs/enhanced_%j.out
 #SBATCH --error=runs/enhanced_%j.err
@@ -13,9 +12,10 @@
 # Large dataset, longer training, larger NSGA-II/PPO budgets, 14nm aging
 # preset with stochastic variation and NBTI recovery.
 #
-# Submit from the repo root:
-#   bash scripts/param_discover.sh   # find your partition + account first
-#   sbatch --partition=<PART> --account=<ACCT> scripts/param_a100_enhanced.slurm
+# Verified for CDAC PARAM Siddhi-AI (DGX-A100, 40GB). Submit from repo root:
+#   sbatch scripts/param_a100_enhanced.slurm
+# Different site/partition? Override on the CLI (no need to edit this file):
+#   sbatch --partition=<PART> --gres=gpu:1 scripts/param_a100_enhanced.slurm
 #
 # To use imported public workload + Timeloop/Accelergy traces instead of the
 # synthetic generator, set USE_IMPORTED_TRACES=1 and point the *_FILE vars at
@@ -30,6 +30,7 @@ USE_IMPORTED_TRACES="${USE_IMPORTED_TRACES:-0}"
 WORKLOAD_FILE="${WORKLOAD_FILE:-data/workloads/public_tiny.yaml}"
 ACTIVITY_FILE="${ACTIVITY_FILE:-data/activity_traces/public_tiny.json}"
 
+export OMP_NUM_THREADS="${SLURM_NTASKS_PER_NODE:-16}"
 mkdir -p runs
 module purge 2>/dev/null || true
 module load "$PYTHON_MODULE" 2>/dev/null || true
