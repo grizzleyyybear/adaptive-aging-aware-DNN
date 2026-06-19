@@ -138,6 +138,7 @@ SLURM job scripts and helpers are in `scripts/`:
 | Script | Purpose |
 |---|---|
 | `scripts/param_setup_env.sh` | One-time env setup on a login node (CUDA PyTorch, PyG, requirements, tests) |
+| `scripts/param_discover.sh` | Print this site's GPU partitions + your account, then the exact `sbatch` command |
 | `scripts/param_a100_full.slurm` | Standard full benchmark (40k synthetic samples) on 1x A100 |
 | `scripts/param_a100_enhanced.slurm` | Enhanced run (100k samples, larger NSGA/PPO, 14nm aging preset) |
 | `scripts/param_collect_artifacts.sh` | Bundle results/figures/tables/checkpoints into a tarball |
@@ -154,22 +155,23 @@ cd adaptive-aging-aware-DNN
 #    PARAM_PYTHON_MODULE=python/3.10.x PARAM_CUDA_MODULE=cuda/12.1 bash scripts/param_setup_env.sh
 bash scripts/param_setup_env.sh
 
-# 2a. Before submitting, edit the two CHANGE lines in each .slurm file:
-#       #SBATCH --partition=<your-a100-partition>
-#       #SBATCH --account=<your-allocation>
+# 2a. Discover this site's GPU partition + your account (partition names
+#     vary per PARAM site; "gpu" may not exist):
+bash scripts/param_discover.sh
 
-# 2b. Submit the standard full benchmark
-sbatch scripts/param_a100_full.slurm
+# 2b. Submit the standard full benchmark, passing partition+account on the CLI
+#     (these override the #SBATCH defaults, so you do NOT need to edit the file):
+sbatch --partition=<PART> --account=<ACCT> scripts/param_a100_full.slurm
 
 # 2c. Or submit the enhanced research run
-sbatch scripts/param_a100_enhanced.slurm
+sbatch --partition=<PART> --account=<ACCT> scripts/param_a100_enhanced.slurm
 
 # To use imported public workload + Timeloop/Accelergy traces in the enhanced run,
 # replace the tiny example files, then submit with:
 #   USE_IMPORTED_TRACES=1 \
 #   WORKLOAD_FILE=data/workloads/<full>.yaml \
 #   ACTIVITY_FILE=data/activity_traces/<traces>.json \
-#   sbatch scripts/param_a100_enhanced.slurm
+#   sbatch --partition=<PART> --account=<ACCT> scripts/param_a100_enhanced.slurm
 
 # 3. Monitor
 squeue -u "$USER"

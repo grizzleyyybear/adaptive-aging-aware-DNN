@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=aging-full
-#SBATCH --partition=gpu                 # CHANGE: your A100 partition (e.g. gpu, gpu, standard-gpu)
-#SBATCH --account=YOUR_ACCOUNT          # CHANGE: your PARAM allocation/project account
+##SBATCH --partition=CHANGE_ME           # set via: sbatch --partition=<PART> ...
+##SBATCH --account=CHANGE_ME             # set via: sbatch --account=<ACCT> ...
 #SBATCH --gres=gpu:1                    # 1x A100 is sufficient (pipeline is single-GPU)
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
@@ -10,8 +10,9 @@
 #SBATCH --error=runs/full_%j.err
 #
 # Standard full benchmark on a single A100 (synthetic dataset, 40k samples).
-# Submit from the repo root:
-#   sbatch scripts/param_a100_full.slurm
+# First discover your partition/account:  bash scripts/param_discover.sh
+# Then submit from the repo root, passing them on the CLI (overrides #SBATCH):
+#   sbatch --partition=<PART> --account=<ACCT> scripts/param_a100_full.slurm
 set -euo pipefail
 
 ENV_DIR="${PARAM_ENV_DIR:-$HOME/envs/aging-aware-dnn}"

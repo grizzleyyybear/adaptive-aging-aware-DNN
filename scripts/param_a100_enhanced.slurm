@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=aging-enh
-#SBATCH --partition=gpu                 # CHANGE: your A100 partition
-#SBATCH --account=YOUR_ACCOUNT          # CHANGE: your PARAM allocation/project account
+##SBATCH --partition=CHANGE_ME           # set via: sbatch --partition=<PART> ...
+##SBATCH --account=CHANGE_ME             # set via: sbatch --account=<ACCT> ...
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=96G
@@ -14,7 +14,8 @@
 # preset with stochastic variation and NBTI recovery.
 #
 # Submit from the repo root:
-#   sbatch scripts/param_a100_enhanced.slurm
+#   bash scripts/param_discover.sh   # find your partition + account first
+#   sbatch --partition=<PART> --account=<ACCT> scripts/param_a100_enhanced.slurm
 #
 # To use imported public workload + Timeloop/Accelergy traces instead of the
 # synthetic generator, set USE_IMPORTED_TRACES=1 and point the *_FILE vars at
