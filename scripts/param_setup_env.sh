@@ -34,6 +34,9 @@ pip install torch-geometric
 echo "==> Installing remaining requirements"
 pip install -r requirements.txt
 
+echo "==> Ensuring pytest is available"
+pip install pytest
+
 echo "==> Verifying CUDA visibility"
 python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no-gpu')"
 
