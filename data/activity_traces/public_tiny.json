@@ -1,0 +1,30 @@
+{
+  "schema_version": "activity-trace-v1",
+  "description": "Tiny normalized traces for imported-trace smoke validation; replace with Timeloop/Accelergy outputs for A100 runs.",
+  "traces": [
+    {
+      "trace_id": "resnet50_tiny_trace_0",
+      "workload_name": "MLPerf-ResNet50-Tiny",
+      "source": "analytical-normalized-example",
+      "latency_cycles": 1450000.0,
+      "energy_pj": 520000000.0,
+      "activity": {
+        "mac_utilization": [0.82, 0.79, 0.76, 0.74, 0.70, 0.66, 0.63, 0.60, 0.58, 0.55, 0.53, 0.50, 0.47, 0.44, 0.40, 0.36],
+        "sram_access_rate": [0.74, 0.69, 0.65, 0.61, 0.57, 0.52, 0.47, 0.43],
+        "noc_traffic": [0.64, 0.58, 0.52, 0.46]
+      }
+    },
+    {
+      "trace_id": "bert_tiny_trace_0",
+      "workload_name": "MLPerf-BERT-Tiny",
+      "source": "analytical-normalized-example",
+      "latency_cycles": 980000.0,
+      "energy_pj": 410000000.0,
+      "activity": {
+        "mac_utilization": [0.68, 0.71, 0.73, 0.75, 0.77, 0.78, 0.76, 0.74, 0.72, 0.70, 0.67, 0.64, 0.61, 0.58, 0.55, 0.52],
+        "sram_access_rate": [0.58, 0.60, 0.63, 0.65, 0.62, 0.59, 0.56, 0.53],
+        "noc_traffic": [0.48, 0.55, 0.61, 0.57]
+      }
+    }
+  ]
+}

@@ -53,3 +53,16 @@ def test_workload_generator():
     layers = runner.get_workload_layers('BERT-Base')
     assert len(layers) > 0
     assert layers[0]['type'] == 'matmul'
+
+
+def test_workload_runner_loads_public_trace_file():
+    cfg = OmegaConf.create({
+        "trace_files": ["data/workloads/public_tiny.yaml"]
+    })
+    runner = WorkloadRunner(cfg)
+
+    assert "MLPerf-ResNet50-Tiny" in runner.available_workloads
+    layers = runner.get_workload_layers("ResNet50-MLPerf-Tiny")
+    assert len(layers) == 5
+    assert layers[0]["type"] == "conv2d"
+    assert layers[0]["K"] == 64

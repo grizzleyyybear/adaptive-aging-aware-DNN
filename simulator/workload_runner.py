@@ -1,5 +1,8 @@
+import copy
 import numpy as np
 from typing import List, Dict
+
+from simulator.workload_importer import load_workloads_from_config
 
 WORKLOAD_SPECS = {
     'ResNet-50': [
@@ -103,10 +106,18 @@ class WorkloadRunner:
     """
     def __init__(self, cfg=None):
         self.cfg = cfg
-        self.available_workloads = list(WORKLOAD_SPECS.keys())
+        self.external_workloads = load_workloads_from_config(cfg)
+        canonical_external = []
+        seen_layers = set()
+        for name, layers in self.external_workloads.items():
+            if not layers or id(layers) in seen_layers:
+                continue
+            canonical_external.append(name)
+            seen_layers.add(id(layers))
+        self.available_workloads = list(dict.fromkeys([*WORKLOAD_SPECS.keys(), *canonical_external]))
 
     def normalize_workload_name(self, workload_name: str) -> str:
-        if workload_name in WORKLOAD_SPECS:
+        if workload_name in self.external_workloads or workload_name in WORKLOAD_SPECS:
             return workload_name
         return WORKLOAD_ALIASES.get(workload_name, workload_name)
         
@@ -144,6 +155,8 @@ class WorkloadRunner:
         Fetches layer parameters for the specified workload.
         """
         canonical_name = self.normalize_workload_name(workload_name)
+        if canonical_name in self.external_workloads:
+            return copy.deepcopy(self.external_workloads[canonical_name])
         if canonical_name in WORKLOAD_SPECS:
-            return WORKLOAD_SPECS[canonical_name]
-        return WORKLOAD_SPECS['ResNet-50'] # default fallback
+            return copy.deepcopy(WORKLOAD_SPECS[canonical_name])
+        return copy.deepcopy(WORKLOAD_SPECS['ResNet-50']) # default fallback

@@ -1,0 +1,22 @@
+schema_version: workload-trace-v1
+description: Small public-dimension examples used to validate imported workload mode.
+workloads:
+  - name: MLPerf-ResNet50-Tiny
+    aliases: [ResNet50-MLPerf-Tiny]
+    source: MLPerf Inference style dimensions, compact validation subset
+    family: cnn
+    layers:
+      - {name: conv1, type: conv2d, N: 1, C: 3, K: 64, R: 7, S: 7, P: 112, Q: 112, stride: 2}
+      - {name: res2_3x3, type: conv2d, N: 1, C: 64, K: 64, R: 3, S: 3, P: 56, Q: 56, stride: 1}
+      - {name: res3_1x1, type: conv2d, N: 1, C: 256, K: 128, R: 1, S: 1, P: 28, Q: 28, stride: 1}
+      - {name: res4_3x3, type: conv2d, N: 1, C: 256, K: 256, R: 3, S: 3, P: 14, Q: 14, stride: 1}
+      - {name: res5_1x1, type: conv2d, N: 1, C: 1024, K: 2048, R: 1, S: 1, P: 7, Q: 7, stride: 1}
+  - name: MLPerf-BERT-Tiny
+    aliases: [BERT-MLPerf-Tiny]
+    source: MLPerf Inference BERT style dimensions, compact validation subset
+    family: transformer
+    layers:
+      - {name: qkv_projection, type: matmul, M: 384, K: 768, N: 2304}
+      - {name: attention_output, type: matmul, M: 384, K: 768, N: 768}
+      - {name: ffn_expand, type: matmul, M: 384, K: 768, N: 3072}
+      - {name: ffn_project, type: matmul, M: 384, K: 3072, N: 768}

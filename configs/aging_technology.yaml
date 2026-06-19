@@ -1,0 +1,40 @@
+aging:
+  technology_node: 14nm_finfet
+  label_model_version: aging-v2
+  stochastic_variation: true
+  variation_sigma: 0.08
+  variation_seed: 42
+  recovery:
+    enabled: true
+    coefficient: 0.20
+  technology_presets:
+    28nm_bulk:
+      node_nm: 28
+      nbti_A: 0.0040
+      nbti_n: 0.23
+      hci_B: 0.000080
+      hci_m: 0.50
+      tddb_k: 2.10
+      tddb_beta: 10.50
+      temperature_K: 358.0
+      voltage_v: 0.90
+    14nm_finfet:
+      node_nm: 14
+      nbti_A: 0.0055
+      nbti_n: 0.25
+      hci_B: 0.000120
+      hci_m: 0.52
+      tddb_k: 2.60
+      tddb_beta: 9.80
+      temperature_K: 373.0
+      voltage_v: 0.80
+    7nm_finfet:
+      node_nm: 7
+      nbti_A: 0.0068
+      nbti_n: 0.27
+      hci_B: 0.000160
+      hci_m: 0.55
+      tddb_k: 3.05
+      tddb_beta: 9.30
+      temperature_K: 388.0
+      voltage_v: 0.72

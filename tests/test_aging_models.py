@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+from omegaconf import OmegaConf
 
 from aging_models.nbti_model import NBTIModel
 from aging_models.hci_model import HCIModel
@@ -57,3 +58,32 @@ def test_aging_generator_trajectory():
     for i in range(4):
         assert traj[i, 0] <= traj[i+1, 0]
         assert traj[i, 1] <= traj[i+1, 1]
+
+
+def test_aging_generator_technology_preset_and_recovery_metadata():
+    cfg = OmegaConf.create({
+        "seed": 7,
+        "aging": {
+            "technology_node": "14nm_finfet",
+            "label_model_version": "aging-v2",
+            "stochastic_variation": True,
+            "variation_sigma": 0.05,
+            "variation_seed": 7,
+            "recovery": {"enabled": True, "coefficient": 0.2},
+        },
+        "planning": {"nbti": 0.4, "hci": 0.4, "tddb": 0.2},
+    })
+    gen = AgingLabelGenerator(cfg=cfg)
+    activity = {
+        "switching_activity": np.array([0.2, 0.8], dtype=np.float32),
+        "mac_utilization": np.array([0.2, 0.8], dtype=np.float32),
+    }
+
+    score = gen.compute_aging_score(activity, stress_time_s=3600.0)
+    metadata = gen.metadata()
+
+    assert score.shape == (2,)
+    assert np.all((score >= 0.0) & (score <= 1.0))
+    assert metadata["technology_node"] == "14nm_finfet"
+    assert metadata["technology_node_nm"] == 14
+    assert metadata["recovery_enabled"] is True

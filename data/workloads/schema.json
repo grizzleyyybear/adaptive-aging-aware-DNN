@@ -1,0 +1,26 @@
+{
+  "schema_version": "workload-trace-v1",
+  "description": "Compact public workload layer dimensions for MLPerf, MAESTRO, CoSA, or hand-normalized traces.",
+  "workloads": [
+    {
+      "name": "string",
+      "aliases": ["string"],
+      "source": "string",
+      "family": "cnn|transformer|recommendation|medical|other",
+      "layers": [
+        {
+          "name": "string",
+          "type": "conv2d|matmul|fc|pool|bn",
+          "N": 1,
+          "C": 3,
+          "K": 64,
+          "R": 3,
+          "S": 3,
+          "P": 32,
+          "Q": 32,
+          "stride": 1
+        }
+      ]
+    }
+  ]
+}

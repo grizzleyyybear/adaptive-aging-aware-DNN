@@ -316,11 +316,12 @@ def generate_tables():
             "peak_reduction_percent": f"{metrics['reduction']:.2f}",
             "cache_hits": metrics["cache_hits"],
             "converged_generation": metrics["converged_gen"],
+            "hypervolume_final": f"{metrics.get('hypervolume_final', 0.0):.6f}",
         })
     write_table(
         OUTPUT_TABLE_DIR / "nsga2_results.csv",
         nsga_rows,
-        ["workload", "pareto_solutions", "initial_peak_aging", "best_peak_aging", "peak_reduction_percent", "cache_hits", "converged_generation"],
+        ["workload", "pareto_solutions", "initial_peak_aging", "best_peak_aging", "peak_reduction_percent", "cache_hits", "converged_generation", "hypervolume_final"],
     )
 
     summary_rows = [
@@ -328,11 +329,15 @@ def generate_tables():
         {"metric": "predictor_r2", "value": f"{PRED['r2']:.4f}"},
         {"metric": "predictor_mae", "value": f"{PRED['mae']:.4f}"},
         {"metric": "predictor_rmse", "value": f"{PRED['rmse']:.4f}"},
+        {"metric": "predictor_spearman", "value": f"{PRED.get('spearman', 0.0):.4f}"},
+        {"metric": "predictor_skill_vs_mean", "value": f"{PRED.get('skill_vs_mean', 0.0):.4f}"},
         {"metric": "trajectory_r2", "value": f"{TRAJ['r2']:.4f}"},
         {"metric": "trajectory_mae", "value": f"{TRAJ['mae']:.4f}"},
         {"metric": "trajectory_rmse", "value": f"{TRAJ['rmse']:.4f}"},
+        {"metric": "trajectory_spearman", "value": f"{TRAJ.get('spearman', 0.0):.4f}"},
         {"metric": "total_pareto_solutions", "value": sum(item["count"] for item in NSGA.values())},
         {"metric": "best_nsga_reduction_percent", "value": f"{max(item['reduction'] for item in NSGA.values()):.2f}"},
+        {"metric": "mean_nsga_hypervolume_final", "value": f"{np.mean([item.get('hypervolume_final', 0.0) for item in NSGA.values()]):.6f}"},
         {"metric": "ppo_first_reward", "value": f"{PPO['first']:.4f}"},
         {"metric": "ppo_last_reward", "value": f"{PPO['last']:.4f}"},
         {"metric": "ppo_best_reward", "value": f"{PPO['best']:.4f}"},
@@ -357,20 +362,23 @@ def generate_tables():
         OUTPUT_TABLE_DIR / "nsga2_results.tex",
         "NSGA-II workload mapping results by workload.",
         "tab:nsga2-results",
-        ["Workload", "Pareto", "Initial", "Best", "Reduction"],
-        [[row["workload"], str(row["pareto_solutions"]), row["initial_peak_aging"], row["best_peak_aging"], row["peak_reduction_percent"] + "\\%"] for row in nsga_rows],
+        ["Workload", "Pareto", "Initial", "Best", "Reduction", "HV"],
+        [[row["workload"], str(row["pareto_solutions"]), row["initial_peak_aging"], row["best_peak_aging"], row["peak_reduction_percent"] + "\\%", row["hypervolume_final"]] for row in nsga_rows],
     )
+    ppo_summary_rows = [
+        ["First reward", f"{PPO['first']:.4f}"],
+        ["Last reward", f"{PPO['last']:.4f}"],
+        ["Best reward", f"{PPO['best']:.4f}"],
+        ["Mean reward", f"{PPO['mean']:.4f}"],
+    ]
+    for name, value in (PPO.get("baselines", {}) or {}).items():
+        ppo_summary_rows.append([f"Baseline ({name})", f"{float(value):.4f}"])
     write_tex_table(
         OUTPUT_TABLE_DIR / "ppo_summary.tex",
         "PPO runtime controller reward summary.",
         "tab:ppo-summary",
         ["Metric", "Value"],
-        [
-            ["First reward", f"{PPO['first']:.4f}"],
-            ["Last reward", f"{PPO['last']:.4f}"],
-            ["Best reward", f"{PPO['best']:.4f}"],
-            ["Mean reward", f"{PPO['mean']:.4f}"],
-        ],
+        ppo_summary_rows,
     )
     print(f"  tables: {OUTPUT_TABLE_DIR.relative_to(REPO)} -> {PAPER_TABLE_DIR.relative_to(REPO)}")
 

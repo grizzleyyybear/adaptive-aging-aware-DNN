@@ -7,6 +7,7 @@ import numpy as np
 import logging
 from pathlib import Path
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from scipy.stats import spearmanr
 from omegaconf import DictConfig
 
 from utils.device import (
@@ -203,13 +204,52 @@ class TrainingPipeline:
         mae = mean_absolute_error(targets_np, preds_np)
         rmse = np.sqrt(mean_squared_error(targets_np, preds_np))
         r2 = r2_score(targets_np, preds_np)
-        
-        return {
+
+        metrics = {
             'loss': avg_loss,
             'mae': float(mae),
             'rmse': float(rmse),
             'r2': float(r2)
         }
+        metrics.update(self._extended_metrics(preds_np, targets_np))
+        return metrics
+
+    def _extended_metrics(self, preds_np: np.ndarray, targets_np: np.ndarray) -> dict:
+        """Reviewer-facing metrics: rank correlation, baselines, and per-step errors."""
+        extra: dict = {}
+        pred_flat = preds_np.reshape(-1).astype(np.float64)
+        target_flat = targets_np.reshape(-1).astype(np.float64)
+
+        if pred_flat.size >= 2 and np.std(pred_flat) > 1e-12 and np.std(target_flat) > 1e-12:
+            rho, _ = spearmanr(pred_flat, target_flat)
+            extra['spearman'] = float(rho) if np.isfinite(rho) else 0.0
+        else:
+            extra['spearman'] = 0.0
+
+        # Mean-predictor baseline: predict the per-column mean of the targets.
+        mean_pred = np.broadcast_to(targets_np.mean(axis=0, keepdims=True), targets_np.shape)
+        extra['baseline_mean_mae'] = float(mean_absolute_error(targets_np, mean_pred))
+        extra['baseline_mean_rmse'] = float(np.sqrt(mean_squared_error(targets_np, mean_pred)))
+        model_rmse = float(np.sqrt(mean_squared_error(targets_np, preds_np)))
+        extra['skill_vs_mean'] = float(1.0 - model_rmse / extra['baseline_mean_rmse']) if extra['baseline_mean_rmse'] > 1e-12 else 0.0
+
+        if self.is_trajectory and preds_np.ndim == 2 and preds_np.shape[1] > 1:
+            horizon = preds_np.shape[1]
+            per_step_mae, per_step_rmse, per_step_r2 = [], [], []
+            for step in range(horizon):
+                p = preds_np[:, step]
+                t = targets_np[:, step]
+                per_step_mae.append(float(mean_absolute_error(t, p)))
+                per_step_rmse.append(float(np.sqrt(mean_squared_error(t, p))))
+                per_step_r2.append(float(r2_score(t, p)) if np.std(t) > 1e-12 else 0.0)
+            extra['per_step_mae'] = per_step_mae
+            extra['per_step_rmse'] = per_step_rmse
+            extra['per_step_r2'] = per_step_r2
+            # Persistence baseline: predict step 0 target for the whole horizon.
+            persistence = np.broadcast_to(targets_np[:, :1], targets_np.shape)
+            extra['baseline_persistence_mae'] = float(mean_absolute_error(targets_np, persistence))
+            extra['baseline_persistence_rmse'] = float(np.sqrt(mean_squared_error(targets_np, persistence)))
+        return extra
         
     def load_checkpoint(self, path: Path) -> None:
         self.model.load_state_dict(torch.load(path, map_location=self.device))

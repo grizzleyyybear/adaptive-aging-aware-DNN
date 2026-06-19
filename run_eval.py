@@ -61,6 +61,13 @@ def _arg_value(name: str, default, cast):
     return cast(sys.argv[idx + 1])
 
 
+def _arg_list(name: str):
+    value = _arg_value(name, "", str)
+    if not value:
+        return []
+    return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
+
+
 def _cuda_total_mib() -> int:
     if not torch.cuda.is_available():
         return 0
@@ -113,6 +120,12 @@ NSGA_POP = _arg_value("--nsga-pop", NSGA_POP, int)
 NSGA_GEN = _arg_value("--nsga-gen", NSGA_GEN, int)
 PPO_ITERS = _arg_value("--ppo-iters", PPO_ITERS, int)
 PPO_STEPS = _arg_value("--ppo-steps", PPO_STEPS, int)
+DATASET_SOURCE = _arg_value("--dataset-source", "synthetic", str)
+WORKLOAD_TRACE_FILES = _arg_list("--workload-traces")
+ACTIVITY_TRACE_FILES = _arg_list("--activity-traces")
+AGING_TECHNOLOGY = _arg_value("--aging-technology", "custom", str)
+AGING_VARIATION_SIGMA = _arg_value("--aging-variation", 0.0, float)
+AGING_RECOVERY_COEFF = _arg_value("--aging-recovery", 0.0, float)
 
 TRAIN_EPOCHS = PRED_EPOCHS  # kept for backward compat display
 
@@ -146,6 +159,45 @@ def _save_results(mode_label, dataset_size, predictor_metrics, trajectory_metric
     return payload
 
 
+def _evaluate_baseline_policy(env, action_fn, episodes=3, seed=0):
+    """Run a non-learned policy over a few episodes and return mean episode reward."""
+    episode_rewards = []
+    for ep in range(max(episodes, 1)):
+        obs, _ = env.reset(seed=seed + ep)
+        done = False
+        total = 0.0
+        steps = 0
+        while not done and steps < env.max_steps:
+            action = action_fn(env, obs, steps)
+            obs, reward, terminated, truncated, _ = env.step(int(action))
+            total += float(reward)
+            steps += 1
+            done = bool(terminated or truncated)
+        episode_rewards.append(total / max(steps, 1))
+    return float(np.mean(episode_rewards)) if episode_rewards else 0.0
+
+
+def _baseline_policies():
+    """Reviewer-facing PPO baselines: random, threshold heuristic, round-robin."""
+    rng = np.random.default_rng(123)
+
+    def random_policy(env, obs, step):
+        return int(rng.integers(0, env.action_space.n))
+
+    def threshold_policy(env, obs, step):
+        peak = float(np.max(env.aging_vector)) if len(env.aging_vector) else 0.0
+        return 1 if peak >= 0.5 * env.failure_threshold else 0
+
+    def round_robin_policy(env, obs, step):
+        return 2
+
+    return {
+        "random": random_policy,
+        "threshold": threshold_policy,
+        "round_robin": round_robin_policy,
+    }
+
+
 def build_config(epochs=None, patience=None):
     ep = epochs if epochs is not None else PRED_EPOCHS
     pt = patience if patience is not None else PRED_PATIENCE
@@ -172,6 +224,50 @@ def build_config(epochs=None, patience=None):
             "patience": pt,
         },
         "aging": {
+            "technology_node": AGING_TECHNOLOGY,
+            "label_model_version": "aging-v2" if AGING_TECHNOLOGY != "custom" or AGING_VARIATION_SIGMA > 0 else "aging-v1",
+            "stochastic_variation": AGING_VARIATION_SIGMA > 0,
+            "variation_sigma": AGING_VARIATION_SIGMA,
+            "variation_seed": 42,
+            "recovery": {
+                "enabled": AGING_RECOVERY_COEFF > 0,
+                "coefficient": AGING_RECOVERY_COEFF,
+            },
+            "technology_presets": {
+                "28nm_bulk": {
+                    "node_nm": 28,
+                    "nbti_A": 0.0040,
+                    "nbti_n": 0.23,
+                    "hci_B": 0.000080,
+                    "hci_m": 0.50,
+                    "tddb_k": 2.10,
+                    "tddb_beta": 10.50,
+                    "temperature_K": 358.0,
+                    "voltage_v": 0.90,
+                },
+                "14nm_finfet": {
+                    "node_nm": 14,
+                    "nbti_A": 0.0055,
+                    "nbti_n": 0.25,
+                    "hci_B": 0.000120,
+                    "hci_m": 0.52,
+                    "tddb_k": 2.60,
+                    "tddb_beta": 9.80,
+                    "temperature_K": 373.0,
+                    "voltage_v": 0.80,
+                },
+                "7nm_finfet": {
+                    "node_nm": 7,
+                    "nbti_A": 0.0068,
+                    "nbti_n": 0.27,
+                    "hci_B": 0.000160,
+                    "hci_m": 0.55,
+                    "tddb_k": 3.05,
+                    "tddb_beta": 9.30,
+                    "temperature_K": 388.0,
+                    "voltage_v": 0.72,
+                },
+            },
             "nbti_A": 0.005, "nbti_n": 0.25,
             "hci_B": 0.0001, "hci_m": 0.5,
             "tddb_k": 2.5, "tddb_beta": 10.0,
@@ -180,7 +276,12 @@ def build_config(epochs=None, patience=None):
             "failure_threshold": 0.8,
             "nbti": 0.40, "hci": 0.35, "tddb": 0.25,
         },
-        "workloads": [],
+        "workloads": {"trace_files": WORKLOAD_TRACE_FILES},
+        "activity_traces": {"trace_files": ACTIVITY_TRACE_FILES},
+        "dataset": {
+            "source": DATASET_SOURCE,
+            "version": "imported-v1" if DATASET_SOURCE == "imported_trace" else "synthetic-v1",
+        },
         "runtime": {"device": DEVICE},
     })
 
@@ -189,6 +290,7 @@ def main():
     mode_label = "FULL" if FULL_MODE else ("QUALITY" if QUALITY_MODE else "SMOKE")
     print(f"\n{SEP}")
     print(f"  PIPELINE EVALUATION [{mode_label}]  —  device={DEVICE}")
+    print(f"  Dataset source: {DATASET_SOURCE}  |  aging={AGING_TECHNOLOGY}  |  variation={AGING_VARIATION_SIGMA:.3f}")
     if torch.cuda.is_available():
         profile = "ultra-low-vram" if ULTRA_LOW_VRAM else ("4gb-safe" if LOW_VRAM_GPU else "standard")
         print(f"  GPU: {torch.cuda.get_device_name(0)} ({_cuda_total_mib()} MiB)  |  profile={profile}  |  batch={TRAIN_BATCH_SIZE}")
@@ -206,6 +308,7 @@ def main():
     from simulator.timeloop_runner import TimeloopRunner
     from simulator.workload_runner import WorkloadRunner
     from features.feature_builder import FeatureBuilder
+    from features.timeloop_trace_loader import TimeloopTraceLoader
     from planning.lifetime_planner import LifetimePlanner
     from models.hybrid_gnn_transformer import HybridGNNTransformer
     from models.training_pipeline import TrainingPipeline
@@ -318,8 +421,11 @@ def main():
     if not PPO_ONLY:
         # ── 5. NSGA-II ────────────────────────────────────────────────────
         print(f"\n[5/6] NSGA-II optimization (pop={NSGA_POP}, gen={NSGA_GEN})...", flush=True)
-        wr = WorkloadRunner(None)
-        workloads = ["ResNet-50", "BERT-Base", "MobileNetV2", "EfficientNet-B4", "ViT-B/16"]
+        wr = WorkloadRunner(cfg.workloads)
+        workloads = wr.available_workloads
+        if DATASET_SOURCE == "imported_trace" and ACTIVITY_TRACE_FILES:
+            traced_workloads = set(TimeloopTraceLoader(cfg.activity_traces, accelerator_cfg=accel_cfg).available_workloads)
+            workloads = [wl for wl in workloads if wl in traced_workloads] or workloads
         nsga_results = {}
         dev = next(predictor.parameters()).device
 
@@ -352,6 +458,9 @@ def main():
                 "best": best, "reduction": red,
                 "cache_hits": opt._cache.hits,
                 "converged_gen": len(opt.hv_history),
+                "hypervolume_initial": float(opt.hv_history[0]) if opt.hv_history else 0.0,
+                "hypervolume_final": float(opt.hv_history[-1]) if opt.hv_history else 0.0,
+                "hypervolume_history": [float(v) for v in opt.hv_history],
                 "baseline": "static_zero",
             }
             print(f"  {wl:20s}  {len(pareto):2d} sols  "
@@ -388,6 +497,19 @@ def main():
     })
     rl_metrics = PPOTrainer(env, policy, ppo_cfg).train()
     rewards = rl_metrics["reward"]
+
+    # ── PPO baselines (random / threshold heuristic / round-robin) ────
+    print("  Evaluating PPO baselines (random, threshold, round-robin)...", flush=True)
+    baseline_episodes = 2 if SMOKE_MODE else 3
+    ppo_baselines = {}
+    for name, fn in _baseline_policies().items():
+        try:
+            ppo_baselines[name] = _evaluate_baseline_policy(env, fn, episodes=baseline_episodes)
+        except Exception as exc:
+            print(f"    baseline {name} failed: {exc}", flush=True)
+            ppo_baselines[name] = 0.0
+    for name, val in ppo_baselines.items():
+        print(f"    baseline {name:12s} mean reward = {val:+.4f}", flush=True)
 
     # ══════════════════════════════════════════════════════════════════
     #   RESULTS
@@ -433,6 +555,10 @@ def main():
     print(f"  Reward curve:  {first_r:+.4f} → {last_r:+.4f}  (prev: -0.61 → +0.36)")
     print(f"  Best reward:   {best_r:+.4f}")
     print(f"  Mean reward:   {mean_r:+.4f}")
+    if ppo_baselines:
+        best_baseline = max(ppo_baselines.values())
+        print(f"  Baselines:     " + "  ".join(f"{k}={v:+.4f}" for k, v in ppo_baselines.items()))
+        print(f"  PPO uplift vs best baseline: {best_r - best_baseline:+.4f}")
 
     # KL & entropy from improved PPO
     kl_vals = rl_metrics.get("approx_kl", [])
@@ -465,7 +591,8 @@ def main():
     # ── Save JSON ─────────────────────────────────────────────────────
     ppo_out = {"rewards": [float(r) for r in rewards],
                "first": float(first_r), "last": float(last_r),
-               "best": float(best_r), "mean": float(mean_r)}
+               "best": float(best_r), "mean": float(mean_r),
+               "baselines": ppo_baselines}
     _save_results(
         mode_label=mode_label,
         dataset_size=DATASET_SIZE,

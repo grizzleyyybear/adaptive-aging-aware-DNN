@@ -1,0 +1,19 @@
+{
+  "schema_version": "activity-trace-v1",
+  "description": "Compact Timeloop/Accelergy-style activity traces consumed by features.timeloop_trace_loader.",
+  "traces": [
+    {
+      "trace_id": "string",
+      "workload_name": "string",
+      "source": "timeloop|accelergy|maestro|analytical",
+      "latency_cycles": 1.0,
+      "energy_pj": 1.0,
+      "activity": {
+        "mac_utilization": [0.0],
+        "sram_access_rate": [0.0],
+        "noc_traffic": [0.0],
+        "switching_activity": [0.0]
+      }
+    }
+  ]
+}
