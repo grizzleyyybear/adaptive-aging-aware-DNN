@@ -31,7 +31,8 @@ data/processed/*.pt
 
 # ── Runtime outputs ───────────────────────────────────────────────────────────
 outputs/
-runs/
+runs/*
+!runs/.gitkeep
 *.out
 *.err
 

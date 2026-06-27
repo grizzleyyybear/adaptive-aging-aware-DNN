@@ -1,0 +1,2 @@
+# Keeps the runs/ directory in the repo so SLURM can open
+# --output=runs/<job>.out immediately (it does not create parent dirs).
