@@ -35,6 +35,11 @@ runs/
 *.out
 *.err
 
+# ── Resume / per-run checkpoints (regenerated; not for version control) ───────
+checkpoints/*_state.pt
+checkpoints_*/
+eval_results_a100_*.json
+
 # ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
 *.ipynb

@@ -186,6 +186,36 @@ Notes:
 - Full results go to `eval_results_a100_full.json`; enhanced results to `eval_results_a100_enhanced.json` (the local `eval_results.json` is left untouched unless you point `--results-path` at it).
 - If you hit a queue time limit, raise `#SBATCH --time` or lower `--dataset-size`.
 
+### Failproof, resumable runs
+
+The A100 SLURM scripts are crash- and timeout-safe — a job that dies
+(walltime kill, preemption, node failure, transient error) resumes instead
+of restarting from scratch:
+
+- **Per-epoch / per-iteration checkpoints.** Predictor and trajectory
+  training save full state (model + optimizer + scheduler + epoch + best
+  metric + patience) every epoch; PPO saves policy + optimizer + scheduler +
+  iteration + obs-normalizer every iteration. All writes are **atomic**
+  (temp file + `os.replace`), so a kill mid-write never corrupts a file.
+- **Stage-level skip.** `run_eval.py --resume` records `completed_stages` in
+  the results JSON; finished stages (predictor → trajectory → NSGA-II → PPO)
+  are skipped on the next run and their checkpoints reloaded.
+- **SLURM auto-resume.** Both `.slurm` scripts set `--requeue` and
+  `--open-mode=append`, pass `--resume`, and wrap the run in a bounded retry
+  loop (`MAX_RETRIES`, default 3) that re-invokes with resume on failure.
+
+To resume manually after any interruption, just resubmit the same job (or
+re-run with the same `--ckpt-dir` and `--results-path`):
+
+```bash
+sbatch scripts/param_a100_full.slurm           # picks up where it left off
+# or directly:
+python run_eval.py --full --device cuda --resume \
+  --results-path eval_results_a100_full.json --ckpt-dir checkpoints_a100_full
+```
+
+Add `--fresh` to force a clean run that ignores existing checkpoints.
+
 `scripts/run_full_pipeline.py` no longer depends on Hydra. It loads the YAML fragments under `configs/` with OmegaConf and accepts dotlist overrides:
 
 ```bash

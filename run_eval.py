@@ -33,11 +33,16 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
+from utils.checkpointing import atomic_write_text
+
 # ── Detect mode ──────────────────────────────────────────────────────
 SMOKE_MODE = "--smoke" in sys.argv
 QUALITY_MODE = "--quality" in sys.argv
 PPO_ONLY   = "--ppo-only" in sys.argv
 NSGA_PPO_ONLY = ("--nsga-ppo-only" in sys.argv) or ("--opt-only" in sys.argv)
+# Resume mode: auto-skip already-completed stages and let trainers continue
+# from per-epoch / per-iteration checkpoints. Failproof for SLURM requeue.
+RESUME_MODE = ("--resume" in sys.argv) and ("--fresh" not in sys.argv)
 # Optimization-only runs should default to full-sized NSGA/PPO unless the
 # user explicitly requests smoke mode.
 FULL_MODE  = ("--full" in sys.argv) or (NSGA_PPO_ONLY and not SMOKE_MODE)
@@ -146,7 +151,7 @@ def _load_existing_results():
         return {}
 
 
-def _save_results(mode_label, dataset_size, predictor_metrics, trajectory_metrics, nsga2_metrics, ppo_metrics):
+def _save_results(mode_label, dataset_size, predictor_metrics, trajectory_metrics, nsga2_metrics, ppo_metrics, completed_stages=None):
     payload = {
         "mode": mode_label,
         "dataset_size": dataset_size,
@@ -155,7 +160,9 @@ def _save_results(mode_label, dataset_size, predictor_metrics, trajectory_metric
         "nsga2": nsga2_metrics,
         "ppo": ppo_metrics,
     }
-    RESULTS_PATH.write_text(json.dumps(payload, indent=2, default=str))
+    if completed_stages is not None:
+        payload["completed_stages"] = sorted(completed_stages)
+    atomic_write_text(json.dumps(payload, indent=2, default=str), RESULTS_PATH)
     return payload
 
 
@@ -335,6 +342,16 @@ def main():
     nsga_results = existing_results.get("nsga2", {})
     ppo_out = existing_results.get("ppo", {"rewards": [], "first": 0.0, "last": 0.0, "best": 0.0, "mean": 0.0})
 
+    # Stages already finished in a prior (possibly interrupted) run. Used by
+    # --resume to skip straight past completed work after a requeue.
+    completed_stages = set(existing_results.get("completed_stages", [])) if RESUME_MODE else set()
+
+    def _stage_done(name):
+        return RESUME_MODE and name in completed_stages
+
+    if RESUME_MODE and completed_stages:
+        print(f"  [resume] completed stages so far: {sorted(completed_stages)}", flush=True)
+
     if PPO_ONLY:
         print("\n[2-5/6] Skipping dataset, predictor, trajectory, and NSGA-II.", flush=True)
         if existing_results:
@@ -374,7 +391,6 @@ def main():
         horizon  = cfg.model.prediction_horizon
 
         # ── 3. Predictor ──────────────────────────────────────────────────
-        print(f"\n[3/6] Training predictor (up to {PRED_EPOCHS} epochs, patience={PRED_PATIENCE})...", flush=True)
         predictor = HybridGNNTransformer(
             node_feature_dim=feat_dim,
             hidden_dim=cfg.model.hidden_dim,
@@ -383,42 +399,61 @@ def main():
             transformer_heads=cfg.model.transformer_heads,
             seq_len=horizon,
         )
-        pred_metrics = TrainingPipeline(pred_cfg, predictor, dataset, checkpoint_dir=CKPT_DIR).train()
-        print(f"  R² = {pred_metrics['r2']:.4f}  |  "
-              f"MAE = {pred_metrics['mae']:.4f}  |  "
-              f"RMSE = {pred_metrics['rmse']:.4f}", flush=True)
-        _save_results(
-            mode_label=mode_label,
-            dataset_size=DATASET_SIZE,
-            predictor_metrics=pred_metrics,
-            trajectory_metrics=traj_metrics,
-            nsga2_metrics=nsga_results,
-            ppo_metrics=ppo_out,
-        )
-        print(f"  Intermediate results saved after step 3 to {RESULTS_PATH}", flush=True)
+        pred_best_ckpt = CKPT_DIR / "predictor_best.pt"
+        if _stage_done("predictor") and pred_best_ckpt.exists():
+            print(f"\n[3/6] Predictor already complete — loading {pred_best_ckpt.name}", flush=True)
+            predictor.load_state_dict(torch.load(pred_best_ckpt, map_location=DEVICE))
+            predictor.to(DEVICE)
+        else:
+            print(f"\n[3/6] Training predictor (up to {PRED_EPOCHS} epochs, patience={PRED_PATIENCE})...", flush=True)
+            pred_metrics = TrainingPipeline(pred_cfg, predictor, dataset, checkpoint_dir=CKPT_DIR, resume=RESUME_MODE).train()
+            print(f"  R² = {pred_metrics['r2']:.4f}  |  "
+                  f"MAE = {pred_metrics['mae']:.4f}  |  "
+                  f"RMSE = {pred_metrics['rmse']:.4f}", flush=True)
+            completed_stages.add("predictor")
+            _save_results(
+                mode_label=mode_label,
+                dataset_size=DATASET_SIZE,
+                predictor_metrics=pred_metrics,
+                trajectory_metrics=traj_metrics,
+                nsga2_metrics=nsga_results,
+                ppo_metrics=ppo_out,
+                completed_stages=completed_stages,
+            )
+            print(f"  Intermediate results saved after step 3 to {RESULTS_PATH}", flush=True)
 
         # ── 4. Trajectory predictor ───────────────────────────────────────
-        print(f"\n[4/6] Training trajectory predictor (up to {TRAJ_EPOCHS} epochs, patience={TRAJ_PATIENCE})...", flush=True)
         traj_pred = TrajectoryPredictor(
             gnn_encoder=predictor,
             hidden_dim=cfg.model.hidden_dim,
             horizon=horizon, gamma=0.95,
         )
-        traj_metrics = TrainingPipeline(traj_cfg, traj_pred, dataset, checkpoint_dir=CKPT_DIR).train()
-        print(f"  R² = {traj_metrics['r2']:.4f}  |  "
-              f"MAE = {traj_metrics['mae']:.4f}  |  "
-              f"RMSE = {traj_metrics['rmse']:.4f}", flush=True)
-        _save_results(
-            mode_label=mode_label,
-            dataset_size=DATASET_SIZE,
-            predictor_metrics=pred_metrics,
-            trajectory_metrics=traj_metrics,
-            nsga2_metrics=nsga_results,
-            ppo_metrics=ppo_out,
-        )
-        print(f"  Intermediate results saved after step 4 to {RESULTS_PATH}", flush=True)
+        traj_best_ckpt = CKPT_DIR / "trajectory_best.pt"
+        if _stage_done("trajectory") and traj_best_ckpt.exists():
+            print(f"\n[4/6] Trajectory predictor already complete — loading {traj_best_ckpt.name}", flush=True)
+            traj_pred.load_state_dict(torch.load(traj_best_ckpt, map_location=DEVICE))
+            traj_pred.to(DEVICE)
+        else:
+            print(f"\n[4/6] Training trajectory predictor (up to {TRAJ_EPOCHS} epochs, patience={TRAJ_PATIENCE})...", flush=True)
+            traj_metrics = TrainingPipeline(traj_cfg, traj_pred, dataset, checkpoint_dir=CKPT_DIR, resume=RESUME_MODE).train()
+            print(f"  R² = {traj_metrics['r2']:.4f}  |  "
+                  f"MAE = {traj_metrics['mae']:.4f}  |  "
+                  f"RMSE = {traj_metrics['rmse']:.4f}", flush=True)
+            completed_stages.add("trajectory")
+            _save_results(
+                mode_label=mode_label,
+                dataset_size=DATASET_SIZE,
+                predictor_metrics=pred_metrics,
+                trajectory_metrics=traj_metrics,
+                nsga2_metrics=nsga_results,
+                ppo_metrics=ppo_out,
+                completed_stages=completed_stages,
+            )
+            print(f"  Intermediate results saved after step 4 to {RESULTS_PATH}", flush=True)
 
-    if not PPO_ONLY:
+    if not PPO_ONLY and _stage_done("nsga2") and nsga_results:
+        print(f"\n[5/6] NSGA-II already complete — reusing {len(nsga_results)} workload result(s)", flush=True)
+    elif not PPO_ONLY:
         # ── 5. NSGA-II ────────────────────────────────────────────────────
         print(f"\n[5/6] NSGA-II optimization (pop={NSGA_POP}, gen={NSGA_GEN})...", flush=True)
         wr = WorkloadRunner(cfg.workloads)
@@ -467,6 +502,7 @@ def main():
                   f"peak {init_peak:.4f}->{best:.4f}  ({red:+.1f}%)  "
                   f"cache={opt._cache.hits}h  conv@{len(opt.hv_history)}gen", flush=True)
 
+        completed_stages.add("nsga2")
         _save_results(
             mode_label=mode_label,
             dataset_size=DATASET_SIZE,
@@ -474,6 +510,7 @@ def main():
             trajectory_metrics=traj_metrics,
             nsga2_metrics=nsga_results,
             ppo_metrics=ppo_out,
+            completed_stages=completed_stages,
         )
         print(f"  Intermediate results saved to {RESULTS_PATH}", flush=True)
 
@@ -494,6 +531,7 @@ def main():
         "eval_interval": max(PPO_ITERS // 3, 1), "eval_episodes": 3,
         "device": DEVICE,
         "checkpoint_dir": str(CKPT_DIR),
+        "resume": RESUME_MODE,
     })
     rl_metrics = PPOTrainer(env, policy, ppo_cfg).train()
     rewards = rl_metrics["reward"]
@@ -593,6 +631,7 @@ def main():
                "first": float(first_r), "last": float(last_r),
                "best": float(best_r), "mean": float(mean_r),
                "baselines": ppo_baselines}
+    completed_stages.add("ppo")
     _save_results(
         mode_label=mode_label,
         dataset_size=DATASET_SIZE,
@@ -600,6 +639,7 @@ def main():
         trajectory_metrics=traj_metrics,
         nsga2_metrics=nsga_results,
         ppo_metrics=ppo_out,
+        completed_stages=completed_stages,
     )
     print(f"\n  Results saved to {RESULTS_PATH}")
     print(f"\n{SEP}\n")

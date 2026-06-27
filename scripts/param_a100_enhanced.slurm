@@ -5,6 +5,8 @@
 #SBATCH --ntasks-per-node=16          # advisory A6: 16 CPUs per A100
 #SBATCH --gres=gpu:A100-SXM4:1        # Siddhi GRES name; generic gpu:1 also works
 #SBATCH --time=12:00:00
+#SBATCH --requeue                     # auto-resubmit on preemption/node failure
+#SBATCH --open-mode=append            # keep logs across requeues
 #SBATCH --output=runs/enhanced_%j.out
 #SBATCH --error=runs/enhanced_%j.err
 #
@@ -41,8 +43,27 @@ source "$ENV_DIR/bin/activate"
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 nvidia-smi || true
 
+# Bounded retry: each attempt resumes from per-epoch / per-iteration
+# checkpoints (run_eval.py --resume), so transient crashes self-heal and a
+# completed stage is never recomputed.
+run_with_resume() {
+  local max_attempts="${MAX_RETRIES:-3}"
+  local attempt=1
+  while [[ $attempt -le $max_attempts ]]; do
+    echo "==> Attempt $attempt/$max_attempts" >&2
+    if "$@"; then
+      return 0
+    fi
+    echo "WARN: attempt $attempt failed (exit $?); resuming..." >&2
+    attempt=$((attempt + 1))
+    sleep 5
+  done
+  echo "ERROR: all $max_attempts attempts failed" >&2
+  return 1
+}
+
 COMMON_ARGS=(
-  --quality --device cuda
+  --quality --device cuda --resume
   --dataset-size 100000
   --pred-epochs 140 --pred-patience 25
   --traj-epochs 170 --traj-patience 30
@@ -57,13 +78,13 @@ COMMON_ARGS=(
 
 if [[ "$USE_IMPORTED_TRACES" == "1" ]]; then
   echo "==> Enhanced run with IMPORTED traces"
-  python run_eval.py "${COMMON_ARGS[@]}" \
+  run_with_resume python run_eval.py "${COMMON_ARGS[@]}" \
     --dataset-source imported_trace \
     --workload-traces "$WORKLOAD_FILE" \
     --activity-traces "$ACTIVITY_FILE"
 else
   echo "==> Enhanced run with SYNTHETIC dataset (14nm preset + variation + recovery)"
-  python run_eval.py "${COMMON_ARGS[@]}"
+  run_with_resume python run_eval.py "${COMMON_ARGS[@]}"
 fi
 
 echo "==> Generating figures and tables"

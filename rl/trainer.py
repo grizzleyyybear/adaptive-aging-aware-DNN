@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - optional dependency behavior
 from rl.environment import AgingControlEnv
 from rl.policy_network import ActorCritic, RunningMeanStd
 from utils.device import configure_torch_runtime, describe_device, resolve_device
+from utils.checkpointing import atomic_torch_save, safe_torch_load
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +100,7 @@ class PPOTrainer:
         log.info("PPOTrainer using %s", describe_device(self.device))
 
         self._best_eval_reward = -float("inf")
+        self.resume = bool(_cfg_get(config, "resume", True))
 
     def _normalize(self, obs: np.ndarray, update: bool = True) -> np.ndarray:
         if not self.normalize_obs:
@@ -124,8 +126,59 @@ class PPOTrainer:
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         final_path = checkpoint_dir / "rl_policy_final.pt"
         best_path = checkpoint_dir / "rl_policy_best.pt"
+        state_path = checkpoint_dir / "rl_policy_state.pt"
 
-        for iteration in range(target_iterations):
+        start_iteration = 0
+        # ── Resume from a previous (possibly interrupted) PPO run ──────────
+        resume_state = safe_torch_load(state_path, map_location=self.device) if self.resume else None
+        if resume_state is not None and int(resume_state.get("target_iterations", -1)) == target_iterations:
+            try:
+                self.policy.load_state_dict(resume_state["policy"])
+                self.optimizer.load_state_dict(resume_state["optimizer"])
+                self.scheduler.load_state_dict(resume_state["scheduler"])
+                self._best_eval_reward = float(resume_state.get("best_eval_reward", self._best_eval_reward))
+                global_step = int(resume_state.get("global_step", 0))
+                start_iteration = int(resume_state.get("iteration", 0))
+                saved_metrics = resume_state.get("metrics")
+                if isinstance(saved_metrics, dict):
+                    for key in metrics:
+                        if key in saved_metrics:
+                            metrics[key] = list(saved_metrics[key])
+                norm = resume_state.get("obs_normalizer")
+                if norm is not None:
+                    self.obs_normalizer.mean = np.asarray(norm["mean"], dtype=np.float64)
+                    self.obs_normalizer.var = np.asarray(norm["var"], dtype=np.float64)
+                    self.obs_normalizer.count = float(norm["count"])
+                if resume_state.get("completed"):
+                    log.info("[resume] PPO already complete (%d iters); skipping training", target_iterations)
+                    return metrics
+                log.info("[resume] PPO resuming from iteration %d/%d (best_eval=%.4f)",
+                         start_iteration, target_iterations, self._best_eval_reward)
+            except Exception as exc:  # corrupt/incompatible → start fresh
+                log.warning("[resume] could not restore PPO state (%s); starting fresh", exc)
+                start_iteration = 0
+        elif resume_state is not None:
+            log.warning("[resume] PPO iteration budget changed; ignoring old state")
+
+        def _save_ppo_state(iter_done: int, completed: bool = False) -> None:
+            atomic_torch_save({
+                "policy": self.policy.state_dict(),
+                "optimizer": self.optimizer.state_dict(),
+                "scheduler": self.scheduler.state_dict(),
+                "iteration": iter_done,
+                "target_iterations": target_iterations,
+                "global_step": global_step,
+                "best_eval_reward": self._best_eval_reward,
+                "metrics": metrics,
+                "obs_normalizer": {
+                    "mean": self.obs_normalizer.mean,
+                    "var": self.obs_normalizer.var,
+                    "count": self.obs_normalizer.count,
+                },
+                "completed": completed,
+            }, state_path)
+
+        for iteration in range(start_iteration, target_iterations):
             # Anneal entropy coefficient linearly
             progress = iteration / max(target_iterations - 1, 1)
             self.ent_coef = self.ent_coef_start + (self.ent_coef_end - self.ent_coef_start) * progress
@@ -187,12 +240,16 @@ class PPOTrainer:
                 )
                 if eval_reward > self._best_eval_reward:
                     self._best_eval_reward = eval_reward
-                    torch.save(self.policy.state_dict(), best_path)
+                    atomic_torch_save(self.policy.state_dict(), best_path)
+
+            # Persist full PPO state every iteration for crash/timeout resume.
+            _save_ppo_state(iter_done=iteration + 1, completed=False)
 
             if global_step >= total_timesteps:
                 break
 
-        torch.save(self.policy.state_dict(), final_path)
+        atomic_torch_save(self.policy.state_dict(), final_path)
+        _save_ppo_state(iter_done=target_iterations, completed=True)
         return metrics
 
     def _collect_rollouts(self, initial_obs: np.ndarray) -> RolloutBuffer:

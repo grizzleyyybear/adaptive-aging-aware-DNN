@@ -19,6 +19,7 @@ from utils.device import (
     resolve_device,
     use_non_blocking,
 )
+from utils.checkpointing import atomic_torch_save, safe_torch_load
 
 log = logging.getLogger(__name__)
 
@@ -26,10 +27,11 @@ class TrainingPipeline:
     """
     Standardizes training loop for the GNN models.
     """
-    def __init__(self, config: DictConfig, model: nn.Module, dataset, checkpoint_dir=None):
+    def __init__(self, config: DictConfig, model: nn.Module, dataset, checkpoint_dir=None, resume: bool = True):
         self.config = config
         self.model = model
         self.dataset = dataset
+        self.resume = resume
         self.device = resolve_device(get_device_request(self.config))
         configure_torch_runtime(self.device)
         self.non_blocking = use_non_blocking(self.device)
@@ -92,41 +94,83 @@ class TrainingPipeline:
         # For trajectory: monitor R² (higher=better). For predictor: monitor loss (lower=better).
         best_val_loss = float('-inf') if self.is_trajectory else float('inf')
         patience_counter = 0
-        
+        start_epoch = 0
+
         checkpoint_dir = self._checkpoint_dir if self._checkpoint_dir else Path("checkpoints")
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        
+
         prefix = "trajectory_" if self.is_trajectory else "predictor_"
         best_path = checkpoint_dir / f"{prefix}best.pt"
         last_path = checkpoint_dir / f"{prefix}last.pt"
-        
-        for epoch in range(self.epochs):
+        state_path = checkpoint_dir / f"{prefix}state.pt"
+
+        # ── Resume from a previous (possibly interrupted) run ──────────────
+        resume_state = safe_torch_load(state_path, map_location=self.device) if self.resume else None
+        if resume_state is not None and resume_state.get("epochs") == self.epochs:
+            try:
+                self.model.load_state_dict(resume_state["model"])
+                self.optimizer.load_state_dict(resume_state["optimizer"])
+                self.scheduler.load_state_dict(resume_state["scheduler"])
+                best_val_loss = resume_state.get("best_metric", best_val_loss)
+                patience_counter = int(resume_state.get("patience_counter", 0))
+                start_epoch = int(resume_state.get("epoch", 0))
+                if resume_state.get("completed"):
+                    log.info("[resume] %s already complete; loading best for eval", prefix.rstrip("_"))
+                    if best_path.exists():
+                        self.load_checkpoint(best_path)
+                    return self.evaluate(split='test')
+                log.info("[resume] %s resuming from epoch %d/%d (best=%.6f)",
+                         prefix.rstrip("_"), start_epoch, self.epochs, best_val_loss)
+            except Exception as exc:  # corrupt/incompatible state → start fresh
+                log.warning("[resume] could not restore %s state (%s); starting fresh", prefix, exc)
+                best_val_loss = float('-inf') if self.is_trajectory else float('inf')
+                patience_counter = 0
+                start_epoch = 0
+        elif resume_state is not None:
+            log.warning("[resume] epoch budget changed (%s != %s); ignoring old %s state",
+                        resume_state.get("epochs"), self.epochs, prefix)
+
+        def _save_state(epoch_done: int, completed: bool = False) -> None:
+            atomic_torch_save({
+                "model": self.model.state_dict(),
+                "optimizer": self.optimizer.state_dict(),
+                "scheduler": self.scheduler.state_dict(),
+                "epoch": epoch_done,
+                "epochs": self.epochs,
+                "best_metric": best_val_loss,
+                "patience_counter": patience_counter,
+                "is_trajectory": self.is_trajectory,
+                "completed": completed,
+            }, state_path)
+
+        early_stopped = False
+        for epoch in range(start_epoch, self.epochs):
             # Training Phase
             self.model.train()
             train_loss = 0.0
-            
+
             for batch in self.train_loader:
                 batch = batch.to(self.device, non_blocking=self.non_blocking)
                 self.optimizer.zero_grad()
-                
+
                 preds = self.model(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
-                
+
                 target = batch.y_trajectory if self.is_trajectory else batch.y
                 loss = self.criterion(preds, target)
-                
+
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
-                
+
                 train_loss += loss.item() * batch.num_graphs
-                
+
             train_loss /= max(len(self.train_loader.dataset), 1)
             self.scheduler.step()
-            
+
             # Validation Phase
             val_metrics = self.evaluate(split='val')
             val_loss = val_metrics['loss']
-            
+
             if wandb.run is not None:
                 try:
                     wandb.log({
@@ -138,7 +182,7 @@ class TrainingPipeline:
                     })
                 except Exception as e:
                     log.warning(f"W&B logging failed: {e}")
-                
+
         # Early Stopping and model saving — monitor R² for trajectory, loss for predictor
             monitor_r2 = self.is_trajectory
             if monitor_r2:
@@ -151,21 +195,29 @@ class TrainingPipeline:
             if improved:
                 best_val_loss = metric_val
                 patience_counter = 0
-                torch.save(self.model.state_dict(), best_path)
+                atomic_torch_save(self.model.state_dict(), best_path)
             else:
                 patience_counter += 1
-                
+
+            # Persist full training state every epoch so an interrupted job
+            # (crash, preemption, walltime kill) resumes from here.
+            atomic_torch_save(self.model.state_dict(), last_path)
+            _save_state(epoch_done=epoch + 1, completed=False)
+
             if patience_counter >= self.patience:
                 print(f"Early stopping at epoch {epoch}")
+                early_stopped = True
                 break
-                
-        # Save last
-        torch.save(self.model.state_dict(), last_path)
-        
+
+        # Mark training complete so a re-run skips straight to evaluation.
+        _save_state(epoch_done=self.epochs, completed=True)
+        _ = early_stopped
+
         # Load best for final test eval
-        self.load_checkpoint(best_path)
+        if best_path.exists():
+            self.load_checkpoint(best_path)
         test_metrics = self.evaluate(split='test')
-        
+
         return test_metrics
         
     def evaluate(self, split: str = 'test') -> dict:
