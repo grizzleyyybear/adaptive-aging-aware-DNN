@@ -96,38 +96,4 @@ python run_eval.py --full
 
 The full mode uses 40,000 samples and is intended for a GPU-capable environment.
 
-## Better dataset mode
-
-The default path remains synthetic so tests and smoke runs stay fast. For stronger research runs, the pipeline can now load public workload dimensions and Timeloop/Accelergy-style activity traces:
-
-```bash
-python run_eval.py --quality --device cuda \
-  --dataset-source imported_trace \
-  --workload-traces data/workloads/public_tiny.yaml \
-  --activity-traces data/activity_traces/public_tiny.json \
-  --aging-technology 14nm_finfet \
-  --aging-variation 0.08 \
-  --aging-recovery 0.20
-```
-
-Schemas live in `data/workloads/schema.json` and `data/activity_traces/schema.json`. The checked-in tiny examples validate the importer only; replace them with full MLPerf/MAESTRO/CoSA workload files and Timeloop/Accelergy traces for A100 runs. Aging presets are documented in `configs/aging_technology.yaml`, and generated PyG samples now store source/technology/provenance IDs.
-
-Suggested A100/PARAM candidate after replacing the tiny traces:
-
-```bash
-python run_eval.py --quality --device cuda \
-  --dataset-source imported_trace \
-  --workload-traces data/workloads/<full-public-workloads>.yaml \
-  --activity-traces data/activity_traces/<timeloop-accelergy-traces>.json \
-  --aging-technology 14nm_finfet \
-  --aging-variation 0.08 \
-  --aging-recovery 0.20 \
-  --dataset-size 100000 \
-  --pred-epochs 140 --pred-patience 25 \
-  --traj-epochs 170 --traj-patience 30 \
-  --nsga-pop 40 --nsga-gen 40 \
-  --ppo-iters 80 --ppo-steps 64
-
-python generate_figures.py
-```
 
