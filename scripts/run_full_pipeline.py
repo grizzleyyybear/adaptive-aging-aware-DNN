@@ -335,6 +335,7 @@ def run_pipeline(cfg: DictConfig) -> None:
             "vf_coef": cfg.ppo.value_loss_coeff,
             "learning_rate": cfg.ppo.learning_rate,
             "device": cfg.runtime.device,
+            "checkpoint_dir": str(checkpoint_dir),
         }
     )
     rl_trainer = PPOTrainer(env, policy, ppo_cfg)
