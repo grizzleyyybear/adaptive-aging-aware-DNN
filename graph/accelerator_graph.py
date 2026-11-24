@@ -103,7 +103,7 @@ class AcceleratorGraph:
                 edge_attr.append([w, float(l)])
             edge_attr_tensor = torch.tensor(edge_attr, dtype=torch.float32)
             
-        x = torch.tensor(node_features, dtype=torch.float32)
+        x = torch.as_tensor(node_features, dtype=torch.float32)
         
         assert edge_index.shape[0] == 2, f"edge_index must be [2, E], got {edge_index.shape}"
         assert edge_index.dtype == torch.long, f"edge_index must be long, got {edge_index.dtype}"

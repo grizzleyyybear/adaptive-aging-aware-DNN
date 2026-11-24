@@ -3,7 +3,6 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
-pytestmark = pytest.mark.skip(reason="WinError 10106 AsyncIO NetworkX collision on CI")
 
 from graph.accelerator_graph import AcceleratorGraph
 from graph.graph_dataset import AgingDataset
@@ -25,11 +24,11 @@ def test_accelerator_graph():
     assert nx_graph.number_of_nodes() == expected_nodes
     assert accel.get_num_nodes() == expected_nodes
     
-    # 16 MACs * 2 links(bidirectional) = 32 edges
-    # 8 SRAMs * 2 links = 16 edges
+    # 16 MACs * 2 banks each * 2 directions = 64 edges
+    # 8 SRAMs * 1 router * 2 directions = 16 edges
     # 4 routers fully connected mesh = (4*3/2)*2 = 12 edges
-    # total edges expected: 32 + 16 + 12 = 60
-    assert nx_graph.number_of_edges() == 60
+    # total edges expected: 64 + 16 + 12 = 92
+    assert nx_graph.number_of_edges() == 92
     
     # test pyg conversion
     dummy_features = np.random.rand(expected_nodes, 21)
@@ -37,8 +36,8 @@ def test_accelerator_graph():
     
     assert isinstance(data, Data)
     assert data.x.shape == (expected_nodes, 21)
-    assert data.edge_index.shape[1] == 60
-    assert data.edge_attr.shape == (60, 2)
+    assert data.edge_index.shape[1] == 92
+    assert data.edge_attr.shape == (92, 2)
     
 def test_dataset_append_and_load(tmp_path):
     root_dir = str(tmp_path)

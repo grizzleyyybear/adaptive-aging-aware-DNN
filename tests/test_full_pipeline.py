@@ -31,7 +31,7 @@ def test_full_pipeline_smoke_plain_config(tmp_path):
             "ppo.n_epochs=1",
             "ablation.test_size=4",
         ],
-        cwd=cwd, env=env, capture_output=True, text=True,
+        cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert result.returncode == 0, f"Pipeline failed:\n{result.stderr}"
     assert (tmp_path / "checkpoints/trajectory_best.pt").exists()
@@ -57,7 +57,7 @@ def test_full_pipeline_smoke():
                 "--results-path",
                 str(Path(tmpdir) / "eval_results.json"),
             ],
-            cwd=cwd, env=env, capture_output=True, text=True, timeout=300,
+            cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
         )
         assert result.returncode == 0, (
             f"run_eval.py --smoke failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
