@@ -91,6 +91,9 @@ python generate_figures.py
 
 # Run tests.
 python -m pytest -q
+
+# Build the paper (pdflatex or Tectonic; prebuilt copy in paper/main.pdf).
+cd paper && tectonic main.tex
 ```
 
 For a larger benchmark run:

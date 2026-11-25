@@ -10,9 +10,15 @@
 \usepackage{xcolor}
 \usepackage{array}
 \usepackage{cite}
+\usepackage{iftex}
+\ifXeTeX % e.g. Tectonic: IEEEtran's Times (ptm) has no Unicode encoding, so use its OpenType clone
+  \usepackage{fontspec}
+  \setmainfont{texgyretermes}[Extension=.otf, UprightFont=*-regular, BoldFont=*-bold,
+    ItalicFont=*-italic, BoldItalicFont=*-bolditalic]
+\fi
 
 % Every figure in paper/assets/ is generated from released artifacts:
-%   generate_figures.py              -> 00_summary, 01, 03, 04 (from eval_results.json)
+%   generate_figures.py              -> 01, 04 (from eval_results.json)
 %   scripts/measure_paper_figures.py -> fig_* (from checkpoints + simulator; no training)
 % Every number in the text is traceable to eval_results.json or paper/tables/measured.json.
 \graphicspath{{assets/}}
@@ -76,14 +82,7 @@ The data are synthetic and the aging models are not calibrated to a process. Sec
 \section{System Architecture}
 \label{sec:architecture}
 
-\begin{figure}[t]
-    \centering
-    \includegraphics[width=\columnwidth]{00_summary.png}
-    \caption{Overview of the released results: held-out MAE against naive baselines, PPO against fixed policies on the same scale, trajectory metrics, NSGA-II per-workload results with the released predictor, and the PPO training curve.}
-    \label{fig:summary}
-\end{figure}
-
-The pipeline has five stages. A roofline-style analytical simulator turns a workload and a layer-to-cluster mapping into per-component activity. A feature builder converts activity into an 8-dimensional vector per node. The Hybrid GNN--Transformer maps the graph to a per-node aging score, and a trajectory head extends it to 10 future steps. NSGA-II uses the predictor as a surrogate to search mappings offline, and a PPO agent learns runtime remapping actions. Fig.~\ref{fig:summary} collects the main results reported in Section~\ref{sec:results}.
+The pipeline has five stages. A roofline-style analytical simulator turns a workload and a layer-to-cluster mapping into per-component activity. A feature builder converts activity into an 8-dimensional vector per node. The Hybrid GNN--Transformer maps the graph to a per-node aging score, and a trajectory head extends it to 10 future steps. NSGA-II uses the predictor as a surrogate to search mappings offline, and a PPO agent learns runtime remapping actions.
 
 \subsection{Accelerator graph}
 \label{sec:graph}
@@ -307,7 +306,7 @@ The predictor has 1.89M parameters (7.2\,MB in FP32) and the predictor with traj
 \section{Conclusion}
 \label{sec:conclusion}
 
-In simulation, a Hybrid GNN--Transformer fits component-level aging labels on an accelerator graph closely ($R^2 = 0.996$) and forecasts a 10-step trajectory with a third of a persistence forecast's error. As a surrogate inside NSGA-II it finds mappings that substantially lower predicted peak aging relative to single-cluster placement. A short PPO run did not produce a controller better than fixed rotation. The most important next steps are calibrating the aging models against silicon data, running multiple seeds with confidence intervals, measuring architecture and horizon ablations, and connecting the learned predictor to the runtime controller with a substantially longer training budget.
+In simulation, a Hybrid GNN--Transformer fits component-level aging labels on an accelerator graph closely ($R^2 = 0.996$) and forecasts a 10-step trajectory with a third of a persistence forecast's error. As a surrogate inside NSGA-II it finds mappings that lower predicted peak aging by 8.6--19.3\% relative to single-cluster placement. A short PPO run did not produce a controller better than fixed rotation. The most important next steps are calibrating the aging models against silicon data, running multiple seeds with confidence intervals, measuring architecture and horizon ablations, and connecting the learned predictor to the runtime controller with a substantially longer training budget.
 
 Code, checkpoints and figure scripts: \url{https://github.com/grizzleyyybear/adaptive-aging-aware-DNN}.
 
@@ -331,7 +330,7 @@ A.~Bu, X.~Li, Z.~Li, and Y.~Chen,
 
 \bibitem{ebrahimipour2020aadam}
 S.~M. Ebrahimipour, B.~Ghavami, H.~Mousavi, M.~Raji, Z.~Fang, and L.~Shannon,
-``Aadam: A fast, accurate, and versatile aging-aware cell library delay model using feed-forward neural network,''
+``AADAM: A fast, accurate, and versatile aging-aware cell library delay model using feed-forward neural network,''
 in \emph{Proc. IEEE/ACM Int. Conf. Comput.-Aided Design (ICCAD)}, Nov. 2020, pp.~1--9, doi:10.1145/3400302.3415605.
 
 \bibitem{alrahis2022gnn4rel}
