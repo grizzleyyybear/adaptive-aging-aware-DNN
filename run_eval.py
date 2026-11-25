@@ -16,6 +16,7 @@ Previous baseline results (from simulator-backed data):
 """
 from __future__ import annotations
 
+import copy
 import os
 import json
 import sys
@@ -167,7 +168,7 @@ def _save_results(mode_label, dataset_size, predictor_metrics, trajectory_metric
 
 
 def _evaluate_baseline_policy(env, action_fn, episodes=3, seed=0):
-    """Run a non-learned policy over a few episodes and return mean episode reward."""
+    """Run a non-learned policy and return mean total reward per episode (same scale as PPO)."""
     episode_rewards = []
     for ep in range(max(episodes, 1)):
         obs, _ = env.reset(seed=seed + ep)
@@ -180,7 +181,7 @@ def _evaluate_baseline_policy(env, action_fn, episodes=3, seed=0):
             total += float(reward)
             steps += 1
             done = bool(terminated or truncated)
-        episode_rewards.append(total / max(steps, 1))
+        episode_rewards.append(total)
     return float(np.mean(episode_rewards)) if episode_rewards else 0.0
 
 
@@ -424,7 +425,7 @@ def main():
 
         # ── 4. Trajectory predictor ───────────────────────────────────────
         traj_pred = TrajectoryPredictor(
-            gnn_encoder=predictor,
+            gnn_encoder=copy.deepcopy(predictor),
             hidden_dim=cfg.model.hidden_dim,
             horizon=horizon, gamma=0.95,
         )
@@ -486,7 +487,11 @@ def main():
             opt = NSGA2Optimizer(accel_cfg, sim, predictor, nsga_cfg)
             pareto = opt.run(init_map, n_gen=NSGA_GEN, workload_name=wl)
 
-            best = min((s.peak_aging for s in pareto), default=init_peak)
+            # s.peak_aging is f1 (peak + balance penalty); re-simulate for the true peak.
+            best = min((simulate_mapping(simulator=sim, feature_builder=fb, graph=graph, layers=layers,
+                                         mapping=s.mapping, workload_name=wl, stress_time_s=360_000.0,
+                                         predictor=predictor, device=dev)["peak_aging"] for s in pareto),
+                       default=init_peak)
             red  = (init_peak - best) / max(init_peak, 1e-9) * 100
             nsga_results[wl] = {
                 "count": len(pareto), "init": init_peak,

@@ -241,6 +241,7 @@ class PPOTrainer:
                 if eval_reward > self._best_eval_reward:
                     self._best_eval_reward = eval_reward
                     atomic_torch_save(self.policy.state_dict(), best_path)
+                    atomic_torch_save(self._obs_norm_state(), best_path.with_name("rl_policy_best_obs_norm.pt"))
 
             # Persist full PPO state every iteration for crash/timeout resume.
             _save_ppo_state(iter_done=iteration + 1, completed=False)
@@ -249,8 +250,13 @@ class PPOTrainer:
                 break
 
         atomic_torch_save(self.policy.state_dict(), final_path)
+        atomic_torch_save(self._obs_norm_state(), final_path.with_name("rl_policy_final_obs_norm.pt"))
         _save_ppo_state(iter_done=target_iterations, completed=True)
         return metrics
+
+    def _obs_norm_state(self) -> dict:
+        n = self.obs_normalizer
+        return {"mean": n.mean, "var": n.var, "count": n.count}
 
     def _collect_rollouts(self, initial_obs: np.ndarray) -> RolloutBuffer:
         obs_items = []

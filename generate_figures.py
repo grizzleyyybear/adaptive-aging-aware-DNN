@@ -35,20 +35,25 @@ TRAJ  = R["trajectory"]
 NSGA  = R["nsga2"]
 PPO   = R["ppo"]
 
-# Literature baselines
-BASELINES = {
-    "AaDaM\n(FFNN)":    0.72,
-    "GNN4REL\n(PNA)":   0.89,
-    "STTN-GAT\n(SoTA)": 0.981,
-    "This work\n(Ours)": PRED["r2"],
-}
+# NSGA-II numbers in eval_results.json from runs before the encoder-sharing and
+# f1-vs-peak fixes are biased; prefer the re-measured ones when available.
+_MEASURED = REPO / "paper" / "tables" / "measured.json"
+if _MEASURED.exists():
+    _m = json.loads(_MEASURED.read_text(encoding="utf-8")).get("nsga2", {})
+    if _m:
+        NSGA = {wl: {"count": v["pareto_count"], "init": v["init_peak"], "best": v["best_true_peak"],
+                     "reduction": v["reduction_pct"], "cache_hits": v["cache_hits"],
+                     "converged_gen": v["generations"]} for wl, v in _m.items()}
 
-ABLATION = {
-    "GCN\nonly":          0.8712,
-    "GCN\n+GAT":          0.9218,
-    "GCN+GAT\n+Transf.":  0.9524,
-    "Full\nHybrid":       PRED["r2"],
+# Measured test-set MAE: model vs. naive baselines (all from eval_results.json).
+BASELINES = {
+    "Predictor:\nmean baseline": PRED["baseline_mean_mae"],
+    "Predictor:\nmodel":         PRED["mae"],
+    "Trajectory:\nmean baseline": TRAJ["baseline_mean_mae"],
+    "Trajectory:\npersistence":   TRAJ["baseline_persistence_mae"],
+    "Trajectory:\nmodel":         TRAJ["mae"],
 }
+BASELINE_COLORS = ["#4878cf", "#e24a33", "#4878cf", "#4878cf", "#e24a33"]
 
 COLORS = {
     "baseline": "#4878cf",
@@ -75,58 +80,23 @@ plt.rcParams.update({
 })
 
 
-# ── Figure 1: Predictor R² vs. literature ────────────────────────────────────
+# ── Figure 1: model vs. naive baselines (test-set MAE) ───────────────────────
 def fig_predictor_vs_baselines():
-    fig, ax = plt.subplots(figsize=(7, 4.5))
+    fig, ax = plt.subplots(figsize=(8, 4.5))
     labels = list(BASELINES.keys())
     vals   = list(BASELINES.values())
-    colors = [COLORS["baseline"]] * 3 + [COLORS["ours"]]
-    bars = ax.bar(labels, vals, color=colors, width=0.5, edgecolor="white", linewidth=0.8)
-    ax.axhline(0.981, color="gray", linestyle="--", linewidth=0.9, label="STTN-GAT SoTA (0.981)")
-    ax.set_ylabel("R²  (higher is better)", fontsize=11)
-    ax.set_title("Aging Predictor: R² vs. Published Baselines", fontsize=12, fontweight="bold")
-    ax.set_ylim(0.65, 1.02)
-    ax.legend(fontsize=9)
+    bars = ax.bar(labels, vals, color=BASELINE_COLORS, width=0.55, edgecolor="white", linewidth=0.8)
+    ax.set_ylabel("Test-set MAE  (lower is better)", fontsize=11)
+    ax.set_title(f"Held-out MAE vs. naive baselines  (predictor R²={PRED['r2']:.4f}, trajectory R²={TRAJ['r2']:.4f})",
+                 fontsize=10, fontweight="bold")
     for bar, v in zip(bars, vals):
-        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.004, f"{v:.4f}",
-                ha="center", va="bottom", fontsize=9, fontweight="bold" if v == PRED["r2"] else "normal")
-    fig.text(0.02, 0.01,
-             "Baselines operate at circuit-path level (timing delay in ps).\n"
-             "This work predicts component-level aging [0,1] — harder task.",
-             fontsize=7.5, color="gray")
-    plt.tight_layout(rect=[0, 0.06, 1, 1])
+        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.002, f"{v:.4f}", ha="center", va="bottom", fontsize=9)
+    plt.tight_layout()
     path = FIG_DIR / "01_predictor_vs_baselines.png"
     fig.savefig(path, bbox_inches="tight")
     plt.close()
     _mirror(path, PAPER_ASSET_DIR)
     print("  saved: 01_predictor_vs_baselines.png")
-
-
-# ── Figure 2: Ablation study ──────────────────────────────────────────────────
-def fig_ablation():
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    labels = list(ABLATION.keys())
-    vals   = list(ABLATION.values())
-    colors = [COLORS["ablation"]] * 3 + [COLORS["ours"]]
-    bars = ax.bar(labels, vals, color=colors, width=0.5, edgecolor="white", linewidth=0.8)
-    ax.set_ylabel("R²", fontsize=11)
-    ax.set_title("Ablation Study: Architecture Component Contributions", fontsize=12, fontweight="bold")
-    ax.set_ylim(0.82, 1.02)
-    prev = None
-    for bar, v, lbl in zip(bars, vals, labels):
-        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.002, f"{v:.4f}",
-                ha="center", va="bottom", fontsize=9)
-        if prev is not None:
-            delta = (v - prev) * 100
-            ax.text(bar.get_x() + bar.get_width() / 2, v - 0.012, f"+{delta:.2f}%",
-                    ha="center", va="top", fontsize=8, color="green")
-        prev = v
-    plt.tight_layout()
-    path = FIG_DIR / "02_ablation.png"
-    fig.savefig(path, bbox_inches="tight")
-    plt.close()
-    _mirror(path, PAPER_ASSET_DIR)
-    print("  saved: 02_ablation.png")
 
 
 # ── Figure 3: NSGA-II per-workload reduction ──────────────────────────────────
@@ -196,31 +166,35 @@ def fig_ppo():
 # ── Figure 5: Overall summary panel ──────────────────────────────────────────
 def fig_summary():
     fig = plt.figure(figsize=(14, 8))
-    gs  = gridspec.GridSpec(2, 3, figure=fig, hspace=0.45, wspace=0.35)
+    gs  = gridspec.GridSpec(2, 3, figure=fig, hspace=0.55, wspace=0.5)
 
     # (0,0) Predictor vs baselines
     ax = fig.add_subplot(gs[0, 0])
-    labels = list(BASELINES.keys())
+    labels = [k.replace(":\n", "\n") for k in BASELINES]
     vals   = list(BASELINES.values())
-    colors = [COLORS["baseline"]] * 3 + [COLORS["ours"]]
-    bars = ax.bar(labels, vals, color=colors, width=0.55, edgecolor="white")
-    ax.axhline(0.981, color="gray", linestyle="--", linewidth=0.8)
-    ax.set_ylim(0.65, 1.03)
-    ax.set_ylabel("R²"); ax.set_title("Predictor vs. Baselines", fontweight="bold", fontsize=10)
+    bars = ax.bar(labels, vals, color=BASELINE_COLORS, width=0.6, edgecolor="white")
+    ax.set_ylabel("Test MAE"); ax.set_title("Model vs. Naive Baselines", fontweight="bold", fontsize=10)
+    ax.tick_params(axis="x", labelsize=6.5)
     for bar, v in zip(bars, vals):
-        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.004, f"{v:.3f}",
-                ha="center", va="bottom", fontsize=7.5)
+        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.002, f"{v:.3f}",
+                ha="center", va="bottom", fontsize=7)
 
-    # (0,1) Ablation
+    # (0,1) PPO vs runtime baselines, both as total reward per episode.
+    # eval_results.json baselines from older runs are per-step means, so use the
+    # re-measured episode sums from scripts/measure_paper_figures.py.
     ax = fig.add_subplot(gs[0, 1])
-    labels2 = list(ABLATION.keys())
-    vals2   = list(ABLATION.values())
-    colors2 = [COLORS["ablation"]] * 3 + [COLORS["ours"]]
-    bars2 = ax.bar(labels2, vals2, color=colors2, width=0.55, edgecolor="white")
-    ax.set_ylim(0.82, 1.03)
-    ax.set_ylabel("R²"); ax.set_title("Ablation Study", fontweight="bold", fontsize=10)
+    measured = REPO / "paper" / "tables" / "measured.json"
+    base = {}
+    if measured.exists():
+        base = {k: v["mean"] for k, v in json.loads(measured.read_text(encoding="utf-8"))
+                ["ppo_vs_baselines_episode_sum"]["baselines"].items()}
+    labels2 = [k.replace(" (no-op)", "") for k in base] + ["PPO\nmean"]
+    vals2   = list(base.values()) + [PPO["mean"]]
+    bars2 = ax.bar(labels2, vals2, color=[COLORS["baseline"]] * len(base) + [COLORS["ours"]], width=0.55, edgecolor="white")
+    ax.tick_params(axis="x", labelsize=7.5, rotation=30)
+    ax.set_ylabel("Reward per episode"); ax.set_title("PPO vs. Fixed Policies", fontweight="bold", fontsize=10)
     for bar, v in zip(bars2, vals2):
-        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.003, f"{v:.3f}",
+        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.01, f"{v:.3f}",
                 ha="center", va="bottom", fontsize=7.5)
 
     # (0,2) Trajectory predictor metrics
@@ -267,7 +241,7 @@ def fig_summary():
     ax.set_title(f"PPO Reward\nBest={PPO['best']:+.3f}", fontweight="bold", fontsize=10)
 
     fig.suptitle(
-        "Predictive Lifetime Management for DNN Accelerators — Full Results\n"
+        "Component-Level Aging Prediction for DNN Accelerators — Released Results\n"
         f"Hybrid GNN-Transformer (R²={PRED['r2']:.4f}) + NSGA-II + PPO",
         fontsize=12, fontweight="bold",
     )
@@ -372,7 +346,7 @@ def generate_tables():
         ["Mean reward", f"{PPO['mean']:.4f}"],
     ]
     for name, value in (PPO.get("baselines", {}) or {}).items():
-        ppo_summary_rows.append([f"Baseline ({name})", f"{float(value):.4f}"])
+        ppo_summary_rows.append([f"Baseline ({name}; per-step mean in legacy runs)", f"{float(value):.4f}"])
     write_tex_table(
         OUTPUT_TABLE_DIR / "ppo_summary.tex",
         "PPO runtime controller reward summary.",
@@ -389,7 +363,6 @@ if __name__ == "__main__":
     print(f"  Results: Predictor R²={PRED['r2']:.4f}  Traj R²={TRAJ['r2']:.4f}  PPO best={PPO['best']:+.4f}")
     print()
     fig_predictor_vs_baselines()
-    fig_ablation()
     fig_nsga2()
     fig_ppo()
     fig_summary()
