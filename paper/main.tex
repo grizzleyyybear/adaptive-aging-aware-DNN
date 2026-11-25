@@ -25,8 +25,8 @@
 
 \begin{document}
 
-\title{Component-Level Aging Prediction and Forecasting for DNN Accelerators \\
-with a Hybrid GNN--Transformer, NSGA-II Mapping, and a PPO Controller}
+\title{Component-Level Aging Prediction for DNN Accelerators: \\
+Accurate Surrogates, Saturated Objectives, and When Aging-Aware Mapping Pays Off}
 
 \author{
 \IEEEauthorblockN{Mrinal Sharma}
@@ -42,7 +42,7 @@ B.Tech, 2025}
 
 % ============================================================
 \begin{abstract}
-DNN accelerators that run the same inference workloads for long periods age unevenly, because NBTI and HCI stress concentrate on the most heavily used compute and memory units. Runtime schedulers need per-component estimates of that stress, and ideally a forecast, to move work before damage accumulates. We model a 28-node accelerator (16 MAC clusters, 8 SRAM banks, 4 NoC routers) as a graph and train a Hybrid GNN--Transformer on labels produced by analytical NBTI/HCI/TDDB models driven by a roofline-style activity simulator. On a held-out test set of 150 synthetic snapshots the predictor reaches $R^2 = 0.996$ (MAE $0.0052$, versus $0.107$ for a mean predictor), and a 10-step trajectory head reaches $R^2 = 0.945$ (MAE $0.036$, versus $0.104$ for a persistence forecast). Using the predictor as a surrogate, NSGA-II searches layer-to-cluster mappings over peak aging, latency and energy and lowers predicted peak aging by 8.6--19.3\% relative to a single-cluster static mapping across five workloads. A PPO runtime controller trained for 960 environment steps improves during training but does \emph{not} outperform a fixed round-robin rotation policy under the same reward; we report this as a negative result. All data are simulated, all results come from a single seed, and the code, checkpoints and figure-generation scripts are released so that every number can be reproduced.
+DNN accelerators that run the same inference workloads for long periods age unevenly, because NBTI and HCI stress concentrate on the most heavily used compute and memory units. Runtime schedulers need per-component estimates of that stress, and ideally a forecast, to move work before damage accumulates. We model a 28-node accelerator (16 MAC clusters, 8 SRAM banks, 4 NoC routers) as a graph and train a Hybrid GNN--Transformer on labels produced by analytical NBTI/HCI/TDDB models driven by a roofline-style activity simulator. On 150 held-out synthetic snapshots the predictor reaches $R^2 = 0.996$ (95\% CI 0.9956--0.9966; MAE $0.0052$ versus $0.107$ for a mean predictor), a 10-step trajectory head reaches $R^2 = 0.945$ (MAE $0.036$ versus $0.104$ for a persistence forecast), and inference takes about 5\,ms per graph. We then ask whether this accuracy improves decisions. Inside NSGA-II the predictor reports 15--28\% lower peak aging than single-cluster placement. Scored by the physics model, however, every load-spreading mapping---round-robin, same-budget random search, surrogate-guided NSGA-II and NSGA-II on the physics model itself---achieves the same 21.6--21.7\%. Once load is spread, the peak sits on a NoC router whose stress the mapping does not change, and the surrogate's extra predicted gains are model error. Adding per-node process variation to the physics model is what makes aging-aware mapping worthwhile: NSGA-II on the physics model then beats round-robin by $8.1\pm5.9$\% ($\sigma = 0.1$) and $15.3\pm11.0$\% ($\sigma = 0.2$). At runtime, a PPO controller trained for 960 steps does not beat always-rotate, and neither does a greedy one-step oracle (1.572 versus 1.574), so the current environment leaves no headroom. We also report and fix a configuration mismatch that had fed the released optimizer out-of-distribution inputs. All data are simulated; the code, checkpoints and scripts reproduce every number.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -59,11 +59,11 @@ The learned aging models closest to this work target circuit timing. Bu et al.~\
 
 This paper studies that setting in simulation. Its contributions are:
 \begin{enumerate}
-    \item A component-level aging predictor (Hybrid GNN--Transformer) over an accelerator graph, trained and evaluated on simulator-generated labels, with comparisons against naive baselines on held-out data.
-    \item A 10-step trajectory head on the same backbone, evaluated per forecast step and per workload.
-    \item An NSGA-II mapper that uses the predictor as a surrogate for peak aging alongside latency and energy.
-    \item A PPO runtime controller and a same-scale comparison with simple fixed policies, which in our budget the controller does not beat.
-    \item A released, end-to-end pipeline in which every reported number and figure is regenerated from checked-in artifacts by a script.
+    \item A component-level aging predictor (Hybrid GNN--Transformer) over an accelerator graph and a 10-step trajectory head, evaluated against naive baselines with bootstrap confidence intervals, per-node-type errors and inference latency.
+    \item A decision-level evaluation of the predictor as an NSGA-II surrogate. Every chosen mapping is re-scored by the physics model and compared with round-robin, same-budget random search and NSGA-II on the physics objective. It shows that node-level accuracy does not yield better mappings here, and why.
+    \item A physics-only study showing that per-node process variation is what makes aging-aware mapping beneficial in this setting, which sets the target for the next learned surrogate.
+    \item A PPO runtime controller compared with every fixed action and a greedy one-step oracle; the controller does not beat always-rotate, and the oracle shows the environment offers no headroom.
+    \item A released pipeline in which a script regenerates every reported number and figure from checked-in artifacts, together with a description of a data/runtime configuration mismatch we found and fixed.
 \end{enumerate}
 
 The data are synthetic and the aging models are not calibrated to a process. Section~\ref{sec:limitations} lists what this implies.
@@ -87,7 +87,7 @@ The pipeline has five stages. A roofline-style analytical simulator turns a work
 \subsection{Accelerator graph}
 \label{sec:graph}
 
-The accelerator is a directed graph $G = (V, E)$ with $|V| = 28$: MAC clusters $v_0,\ldots,v_{15}$ (16 clusters of a $16\times 16$ PE array), SRAM banks $v_{16},\ldots,v_{23}$, and NoC routers $v_{24},\ldots,v_{27}$. MAC cluster $m$ connects to SRAM banks $m \bmod 8$ and $(m+1) \bmod 8$; SRAM bank $b$ connects to router $b \bmod 4$; routers are fully connected. Every link is stored in both directions, giving $|E| = 92$. Each edge carries a weight and a latency (1/1 for compute--memory, 2/2 for memory--network, 4/3 for router--router). These attributes are stored with the graph but are \emph{not} consumed by the GCN and GAT layers in the current implementation.
+The accelerator is a directed graph $G = (V, E)$ with $|V| = 28$: MAC clusters $v_0,\ldots,v_{15}$, SRAM banks $v_{16},\ldots,v_{23}$, and NoC routers $v_{24},\ldots,v_{27}$. MAC cluster $m$ connects to SRAM banks $m \bmod 8$ and $(m+1) \bmod 8$; SRAM bank $b$ connects to router $b \bmod 4$; routers are fully connected. Every link is stored in both directions, giving $|E| = 92$. Each edge carries a weight and a latency (1/1 for compute--memory, 2/2 for memory--network, 4/3 for router--router). These attributes are stored with the graph but are \emph{not} consumed by the GCN and GAT layers in the current implementation.
 
 \subsection{Per-node features}
 \label{sec:features}
@@ -136,12 +136,18 @@ with $\gamma = 0.95$, $K = 10$ and $\lambda = 0.02$, the variance taken across n
 A workload with $L$ layers ($L = 12$--$15$ for our workloads) is mapped onto $C = 16$ clusters by an integer chromosome $\mathbf{m} \in \{0,\ldots,15\}^L$. We minimize
 $f_1 = \max_i \hat{s}_i + 0.3\,\text{Var}(\hat{\mathbf{s}})$ (predicted peak aging plus a balance penalty), $f_2$ = latency$/10^8$ cycles and $f_3$ = energy$/10^9$\,pJ, where $\hat{\mathbf{s}}$ is the predictor's output for the simulated activity of mapping $\mathbf{m}$ at a reference stress time of 360{,}000\,s. The population of 20 contains four structured seeds (all layers on cluster 0, round-robin, shuffled round-robin, perturbed round-robin) and 16 random individuals. Variation uses SBX crossover ($p_c = 0.9$, $\eta = 15$) and polynomial mutation ($p = 0.1$, $\eta = 20$) with integer rounding. A SHA-1 keyed cache avoids re-simulating duplicate chromosomes. Search runs for at most 20 generations and stops early if a hypervolume estimate (reference point $[1, 10^9, 10^9]$, computed over the population) improves by less than $10^{-6}$ relative for 8 consecutive generations.
 
-We report the reduction in \emph{predicted} peak aging (without the balance penalty) of the lowest-peak Pareto mapping relative to the static mapping that places every layer on cluster 0.
+From each run we take the Pareto mapping with the lowest predicted peak (without the balance penalty) and score it twice: with the predictor, as the optimizer sees it, and with the physics label model of Eq.~\eqref{eq:aging_score}, the ground truth of this simulator. Reductions are relative to the static mapping that places every layer on cluster 0. We compare against three references:
+\begin{itemize}
+    \item round-robin (layer $\ell$ on cluster $\ell \bmod 16$);
+    \item same-budget random search: as many uniformly random mappings as the NSGA-II run evaluated, keeping the one with the lowest predicted peak;
+    \item NSGA-II with the physics model instead of the predictor as the aging objective.
+\end{itemize}
+Each search runs with five optimizer seeds, and surrogate NSGA-II also runs once with a larger budget (population 60, 50 generations).
 
 \subsection{PPO runtime controller}
 \label{sec:ppo}
 
-The environment holds a current mapping. Each step it simulates the mapping, computes per-node aging with the physics label model of Eq.~\eqref{eq:aging_score} (the learned predictor is not used inside the environment in the reported run), and builds a 368-dimensional observation: aging vector (28), a heuristic 10-step forecast formed by adding increments $0.01$--$0.05$ to the current aging (280), workload embedding (16), mapping (15), episode progress (1) and per-node budget margin (28). Observations are normalized online with running statistics.
+The environment holds a current mapping. Each step it simulates the mapping (on a $16\times 16$ PE array; see Section~\ref{sec:experiments}), computes per-node aging with the physics label model of Eq.~\eqref{eq:aging_score} (the learned predictor is not used inside the environment in the reported run), and builds a 368-dimensional observation: aging vector (28), a heuristic 10-step forecast formed by adding increments $0.01$--$0.05$ to the current aging (280), workload embedding (16), mapping (15), episode progress (1) and per-node budget margin (28). Observations are normalized online with running statistics.
 
 There are five actions: (0) hold; (1) move the first layer assigned to the hottest MAC cluster to the coolest one; (2) rotate every layer by one cluster; (3) move one layer (chosen by step index) by eight clusters; (4) apply the lifetime planner's rebalancing recommendation. The reward is
 \begin{equation}
@@ -156,7 +162,7 @@ The actor--critic shares a trunk of two residual blocks (hidden width 128, ortho
 \section{Experimental Setup}
 \label{sec:experiments}
 
-\textbf{Accelerator.} 16 MAC clusters over a $16 \times 16$ PE array, 8 SRAM banks, 4 routers, 1\,GHz, 0.8\,V, 51.2\,GB/s DRAM and 512\,GB/s NoC bandwidth.
+\textbf{Accelerator.} 16 MAC clusters, 8 SRAM banks, 4 routers, 1\,GHz, 0.8\,V, 51.2\,GB/s DRAM and 512\,GB/s NoC bandwidth. The dataset, the predictor and every mapping experiment use a $4\times 4$ PE array. While preparing this paper we found that the released training run had simulated its dataset on $4\times 4$ (dataset defaults overrode the configured $16\times 16$) but ran NSGA-II on $16\times 16$, which gave the predictor out-of-distribution inputs (MAC latency features off by 10--15$\times$). The PE array is now a single setting shared by data generation and runtime; with it, runtime features reproduce the stored test features to $6\times 10^{-8}$, and the released dataset regenerates bit-exactly from code. The PPO controller was trained in a $16\times 16$ environment and is compared with fixed policies in that same environment. That environment scores aging with the physics model, not the predictor, so the mismatch does not affect the PPO results.
 
 \textbf{Workloads.} Layer-level models of ResNet-50 (15 layers), BERT-Base (12), MobileNetV2 (13), EfficientNet-B4 (15) and ViT-B/16 (13). These are reduced representations built from each network's characteristic layer shapes, not full layer-by-layer models; attention score and softmax operations are not modelled.
 
@@ -164,9 +170,9 @@ The actor--critic shares a trunk of two residual blocks (hidden width 128, ortho
 
 \textbf{Training.} AdamW (learning rate $10^{-4}$, weight decay $10^{-5}$), cosine annealing, batch size 16. The predictor trains for up to 60 epochs with early stopping on validation MSE (patience 16); the trajectory model for up to 75 epochs with early stopping on validation $R^2$ (patience 18). All runs use seed 42 on one NVIDIA RTX~3050 (4\,GB).
 
-\textbf{Metrics.} For prediction: $R^2$, MAE, RMSE and Spearman's $\rho$ over all test nodes, against a mean predictor (the per-target test mean) and, for trajectories, a persistence forecast that repeats the first-step target. For NSGA-II: Pareto-set size, generations used and the predicted peak-aging reduction defined in Section~\ref{sec:nsga}. For PPO: total reward per 10-step episode.
+\textbf{Metrics.} For prediction: $R^2$, MAE, RMSE and Spearman's $\rho$ over all test nodes, against a mean predictor (the per-target test mean) and, for trajectories, a persistence forecast that repeats the first-step target. Prediction metrics also get 95\% bootstrap confidence intervals (2{,}000 resamples of test graphs). For mapping: peak-aging reduction relative to the static mapping, under the predictor and under the physics model (Section~\ref{sec:nsga}). For runtime control: total reward per 10-step episode over 20 seeded episodes. Latency is the median of 300 timed forward passes after 50 warm-up passes (100 timed passes for the CPU batch), measured on an otherwise idle machine.
 
-\textbf{Reproducibility.} \texttt{scripts/verify\_results.py} reloads the released checkpoints, regenerates the dataset from its seed and recomputes every prediction metric; all twelve reported prediction metrics reproduce to within $2\times 10^{-6}$. \texttt{scripts/measure\_paper\_figures.py} produces every supplemental figure and the NSGA-II, inference and baseline numbers below without any training.
+\textbf{Reproducibility.} \texttt{scripts/verify\_results.py} reloads the released checkpoints, regenerates the dataset from its seed and recomputes every prediction metric; all twelve reported prediction metrics reproduce to within $2\times 10^{-6}$. \texttt{scripts/measure\_paper\_figures.py}, \texttt{scripts/extended\_analysis.py} and \texttt{scripts/variation\_scoping.py} produce every other number and figure below from the released checkpoints, the simulator and the physics model, without any training.
 
 % ============================================================
 \section{Results}
@@ -201,7 +207,9 @@ The actor--critic shares a trunk of two residual blocks (hidden width 128, ortho
 
 Table~\ref{tab:prediction} and Fig.~\ref{fig:predictor} summarize prediction quality. The predictor reaches $R^2 = 0.9962$ and reduces MAE by a factor of about 20 relative to the mean predictor (RMSE skill $0.938$). The high $R^2$ largely reflects how the labels are produced: they are smooth, deterministic functions of a few features, with no process variation or measurement noise. It shows that the architecture can represent the simulator's aging surface; it does not show accuracy on silicon.
 
-We did not run an architecture ablation for this paper, so we make no claim about the individual contribution of the GCN, GAT and transformer blocks.
+Bootstrapping test graphs gives 95\% confidence intervals of $[0.9956, 0.9966]$ for $R^2$ and $[0.0049, 0.0055]$ for MAE. These intervals cover test-sample variation only, not training-seed variation. By node type, MAC clusters reach $R^2 = 0.997$ (MAE 0.0030) and routers 0.995 (MAE 0.0063). SRAM banks reach 0.893 (MAE 0.0091): their labels vary little (s.d.\ 0.036), so a similar absolute error yields a lower $R^2$.
+
+We did not run an architecture ablation for this paper, so we make no claim about the individual contribution of the GCN, GAT and transformer blocks. In particular, because each label is a function of its own node's features, an MLP without message passing may perform as well.
 
 \subsection{Trajectory forecasting}
 
@@ -219,48 +227,78 @@ We did not run an architecture ablation for this paper, so we make no claim abou
     \label{fig:traj_per_workload}
 \end{figure}
 
-Over all ten steps the trajectory head reaches $R^2 = 0.945$ and MAE $0.036$, about a third of the persistence forecast's MAE. Fig.~\ref{fig:traj_step} shows that MAE grows from 0.024 at step 1 to 0.043 at step 10, while per-step $R^2$ stays between 0.942 and 0.948. Fig.~\ref{fig:traj_per_workload} breaks $R^2$ down by workload. Mean per-step $R^2$ ranges from 0.938 (MobileNetV2) to 0.952 (BERT-Base). With 20--40 test graphs per workload, these per-workload differences are small-sample estimates.
+Over all ten steps the trajectory head reaches $R^2 = 0.945$ (95\% CI $[0.9435, 0.9471]$) and MAE $0.036$, about a third of the persistence forecast's MAE. Fig.~\ref{fig:traj_step} shows that MAE grows from 0.024 at step 1 to 0.043 at step 10, while per-step $R^2$ stays between 0.942 and 0.948. Fig.~\ref{fig:traj_per_workload} breaks $R^2$ down by workload. Mean per-step $R^2$ ranges from 0.938 (MobileNetV2) to 0.952 (BERT-Base). With 20--40 test graphs per workload, these per-workload differences are small-sample estimates.
 
 \subsection{NSGA-II mapping}
+\label{sec:nsga_results}
 
 \begin{table}[t]
     \centering
-    \caption{NSGA-II with the released predictor (pop.\ 20, $\le$20 generations, seed 42). Peak aging is predicted; reduction is relative to placing all layers on cluster 0.}
+    \caption{Peak-aging reduction (\%) relative to placing all layers on cluster 0, at 360{,}000\,s. ``Pred.'': as scored by the predictor that guided the search (seed 42 / larger budget). The other columns are scored by the physics model and averaged over 5 optimizer seeds; their s.d.\ is $\le 0.03$.}
     \label{tab:nsga}
     \small
-    \setlength{\tabcolsep}{4pt}
-    \begin{tabular}{lccccc}
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{lcccccc}
         \toprule
-        \textbf{Workload} & $L$ & \textbf{Pareto} & \textbf{Gen.} & \textbf{Peak} & \textbf{Red.} \\
+        & \multicolumn{2}{c}{\textbf{Pred.}} & \multicolumn{4}{c}{\textbf{Physics model}} \\
+        \cmidrule(lr){2-3}\cmidrule(lr){4-7}
+        \textbf{Workload} & \textbf{NSGA} & \textbf{large} & \textbf{RR} & \textbf{Rand.} & \textbf{NSGA} & \textbf{NSGA$^\dagger$} \\
         \midrule
-        ResNet-50 & 15 & 20 & 20 & 0.358$\to$0.327 & 8.6\% \\
-        BERT-Base & 12 & 20 & 20 & 0.366$\to$0.329 & 10.3\% \\
-        MobileNetV2 & 13 & 20 & 20 & 0.358$\to$0.315 & 12.0\% \\
-        EfficientNet-B4 & 15 & 20 & 20 & 0.375$\to$0.326 & 13.0\% \\
-        ViT-B/16 & 13 & 20 & 20 & 0.337$\to$0.272 & 19.3\% \\
+        ResNet-50       & 20.4 & 21.0 & 21.65 & 21.64 & 21.64 & 21.65 \\
+        BERT-Base       & 23.8 & 33.4 & 21.66 & 21.65 & 21.65 & 21.66 \\
+        MobileNetV2     & 20.8 & 20.6 & 21.64 & 21.60 & 21.58 & 21.64 \\
+        EfficientNet-B4 & 15.2 & 17.3 & 21.65 & 21.64 & 21.63 & 21.65 \\
+        ViT-B/16        & 27.8 & 38.6 & 21.65 & 21.65 & 21.64 & 21.65 \\
         \bottomrule
     \end{tabular}
+    \\[2pt]{\footnotesize RR: round-robin. Rand.: same-budget random search. NSGA: surrogate-guided. NSGA$^\dagger$: physics model as objective.}
 \end{table}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=0.9\textwidth]{fig_mapping_study}
+    \caption{Left: physics-model peak-aging reduction of each mapping strategy (5 seeds, $\pm 1$ s.d.). Right: predicted versus physics-model peak aging for the random mappings evaluated by the random-search baseline. Once load is spread, the physics peak is pinned near 0.3565 (a NoC router), while the predictor's peak still varies.}
+    \label{fig:mapping_study}
+\end{figure*}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\columnwidth]{fig_pareto_front_3d}
-    \caption{BERT-Base Pareto set over the three objectives.}
+    \caption{BERT-Base Pareto set of surrogate-guided NSGA-II (seed 42) over the three objectives.}
     \label{fig:pareto_3d}
 \end{figure}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\columnwidth]{fig_aging_heatmap_before_after}
-    \caption{Predicted per-MAC-cluster aging for BERT-Base: all layers on cluster 0 (left) and the lowest-peak NSGA-II mapping (right).}
+    \caption{Predicted per-MAC-cluster aging for BERT-Base: all layers on cluster 0 (left) and the lowest-peak surrogate NSGA-II mapping (right).}
     \label{fig:heatmap}
 \end{figure}
 
-Table~\ref{tab:nsga} reports NSGA-II run with the released predictor checkpoint. Across the five workloads the lowest-peak Pareto mapping lowers predicted peak aging by 8.6--19.3\% (mean 12.6\%) relative to the single-cluster static mapping. In every run all 20 individuals of the final population are mutually non-dominated, so the Pareto-set size is capped by the population and no run triggered early stopping; a larger population and budget would likely find better mappings. The best BERT-Base mapping spreads work over three MAC clusters (Fig.~\ref{fig:heatmap}), and its all-node peak (0.329) falls on a non-MAC node. The static baseline is deliberately pessimistic (it concentrates all work on one cluster) and is itself one of the four structured seeds, so these reductions measure how much the search spreads load, not an improvement over a well-tuned hand mapping. Fig.~\ref{fig:pareto_3d} shows the BERT-Base Pareto set. The evaluation cache saved 82 simulator calls in total across the five searches, so it matters little at this population size.
+Table~\ref{tab:nsga} and Fig.~\ref{fig:mapping_study} summarize the mapping study. Guided by the predictor, NSGA-II reports peak-aging reductions of 15.2--27.8\% (mean 21.6\%) relative to the single-cluster mapping, and up to 38.6\% with a larger budget. Scored by the physics model, the same mappings reduce peak aging by 21.6--21.7\%. So do round-robin, same-budget random search and NSGA-II run directly on the physics model. Across all five workloads and five seeds, no strategy improves on round-robin by more than 0.01 percentage points.
 
-The NSGA-II numbers stored in \texttt{eval\_results.json} differ from Table~\ref{tab:nsga} for two reasons that we found while preparing this paper and have fixed in the released code. First, in the training run the trajectory head shared, and fine-tuned, the predictor's encoder, so the search used a predictor that was never evaluated. Second, the stored reduction compared the optimizer's objective $f_1$, which includes the variance penalty, against an initial value without it. Table~\ref{tab:nsga} uses the evaluated checkpoint and compares predicted peaks on both sides.
+The reason is structural. With all layers on one cluster, the peak is that MAC cluster (physics score 0.455). As soon as layers are spread, the peak moves to a NoC router, at 0.3565 for every workload. The simulator's router traffic does not depend on which cluster runs which layer, so no mapping can lower it. Over 200 random mappings per workload, the physics peak varies with a standard deviation of at most 0.006 and lies on a router in 95--100\% of cases. The predictor's per-node errors (router MAE 0.0063) are of the same size as these differences, so its ranking of spread mappings is essentially noise: Spearman $\rho = 0.17$ over 8{,}889 random mappings. The predicted gains beyond round-robin are therefore model error that the optimizer exploits, and a larger search budget exploits them more (38.6\% predicted for ViT-B/16 against 21.6\% real). Node-level accuracy ($R^2 = 0.996$) does not, by itself, make the predictor a useful surrogate for this objective. Fig.~\ref{fig:pareto_3d} and Fig.~\ref{fig:heatmap} show the BERT-Base Pareto set and the predicted MAC-cluster aging before and after.
 
-\subsection{PPO controller}
+\textbf{When does aging-aware mapping pay off?} Without process variation all MAC clusters age identically, so spreading load is optimal and round-robin already does it. We added per-node lognormal variation (fixed per simulated die, three dies per setting) to the physics model and compared round-robin with NSGA-II on that model (Table~\ref{tab:variation}). With $\sigma = 0.1$, NSGA-II lowers peak aging by $8.1\pm5.9$\% relative to round-robin, and with $\sigma = 0.2$ by $15.3\pm11.0$\% (up to 25.1\%). The gain depends on the die: on one of the three it is near zero because round-robin happens to avoid the weak units. The result is the same for $4\times4$ and $16\times16$ PE arrays (8.1\% and 15.3\% for both). A learned surrogate is therefore worth its cost only if it captures per-unit variation, which the released predictor, trained without variation, cannot.
+
+\begin{table}[t]
+    \centering
+    \caption{NSGA-II on the physics model versus round-robin under per-node process variation (5 workloads $\times$ 3 simulated dies; $\sigma = 0$: one die).}
+    \label{tab:variation}
+    \begin{tabular}{lccc}
+        \toprule
+        $\sigma$ & \textbf{Mean gain} & \textbf{s.d.} & \textbf{Range} \\
+        \midrule
+        0   & 0.00\% & 0.01 & 0.00 to 0.02\% \\
+        0.1 & 8.10\% & 5.92 & $-0.03$ to 13.76\% \\
+        0.2 & 15.26\% & 10.97 & 0.00 to 25.10\% \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The NSGA-II numbers stored in \texttt{eval\_results.json} differ from Table~\ref{tab:nsga} for three reasons, all found while preparing this paper and fixed in the released code. First, in the training run the trajectory head shared, and fine-tuned, the predictor's encoder, so the search used a predictor that was never evaluated. Second, the stored reduction compared the optimizer's objective $f_1$, which includes the variance penalty, against an initial value without it. Third, the search simulated a different PE array from the one the predictor was trained on (Section~\ref{sec:experiments}).
+
+\subsection{Runtime control}
 
 \begin{figure}[t]
     \centering
@@ -276,11 +314,33 @@ The NSGA-II numbers stored in \texttt{eval\_results.json} differ from Table~\ref
     \label{fig:ppo_baselines}
 \end{figure}
 
-During training the mean episode reward went from $1.092$ in the first iteration to $0.982$ in the last, with a mean of $1.032$ and a best iteration of $1.460$ (Fig.~\ref{fig:ppo}). The reward does rise during training: the last ten iterations average $1.200$ against $0.808$ for the first ten. Fig.~\ref{fig:ppo_baselines} puts this on the same scale as fixed policies evaluated in the same environment: over 20 seeded episodes, random scores 1.021$\pm$0.376, threshold scores 0.726$\pm$0.240, round-robin scores 1.574$\pm$0.124, hold (no-op) scores 0.726$\pm$0.240. The threshold policy never fires at these aging levels and coincides with hold. PPO's mean training reward ($1.032$) is at the level of the random policy, and both its last-ten-iteration mean and its best iteration stay below always rotating. (Training rewards come from a stochastic policy on unseeded episodes, so this comparison is approximate.) We conclude that, with this reward and budget, PPO improved during training but did not learn a policy better than fixed rotation. Training was also too short to support any stronger claim: 960 steps is two to three orders of magnitude below typical PPO budgets. The released checkpoints do not include the observation-normalization statistics, so the trained policy cannot be re-evaluated deterministically; the released trainer now saves them.
+\begin{table}[t]
+    \centering
+    \caption{Total reward per 10-step episode for every fixed action and a greedy one-step oracle (20 seeded episodes, PPO training environment).}
+    \label{tab:policies}
+    \begin{tabular}{lc}
+        \toprule
+        \textbf{Policy} & \textbf{Reward} \\
+        \midrule
+        Always rotate (action 2) & $1.574 \pm 0.124$ \\
+        Greedy one-step oracle   & $1.572 \pm 0.154$ \\
+        Hottest-to-coolest (1)   & $1.048 \pm 0.185$ \\
+        Random                   & $1.021 \pm 0.376$ \\
+        Hold (0) / planner (4)   & $0.726 \pm 0.240$ \\
+        Move one layer by 8 (3)  & $0.140 \pm 0.684$ \\
+        \midrule
+        PPO, training mean / best iteration & 1.032 / 1.460 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
 
-\subsection{Model size}
+During training the mean episode reward went from $1.092$ in the first iteration to $0.982$ in the last, with a mean of $1.032$ and a best iteration of $1.460$ (Fig.~\ref{fig:ppo}). The reward does rise during training: the last ten iterations average $1.200$ against $0.808$ for the first ten. Fig.~\ref{fig:ppo_baselines} and Table~\ref{tab:policies} put this on the same scale as fixed policies evaluated in the same environment. The threshold policy never fires at these aging levels and coincides with hold, and the planner action scores exactly the same as hold. PPO's mean training reward is at the level of the random policy, and its best iteration stays below always rotating. (Training rewards come from a stochastic policy on unseeded episodes, so this comparison is approximate.)
 
-The predictor has 1.89M parameters (7.2\,MB in FP32) and the predictor with trajectory head 2.42M (9.2\,MB). We do not report inference latency: our only measurements were taken on a heavily shared machine and are not representative.
+A greedy oracle that tries every action on a copy of the environment and keeps the one with the highest immediate reward scores the same as always rotating. Rotation keeps the mapping a round-robin permutation, which by the analysis in Section~\ref{sec:nsga_results} is already optimal without variation. The environment as configured therefore offers essentially no headroom over a fixed policy, so a learned controller cannot show an advantage in it. A meaningful test needs the process-variation setting of Table~\ref{tab:variation} and a much longer budget than 960 steps. The released checkpoints do not include the observation-normalization statistics, so the trained policy cannot be re-evaluated deterministically; the released trainer now saves them.
+
+\subsection{Model size and latency}
+
+The predictor has 1.89M parameters (7.2\,MB in FP32) and the predictor with trajectory head 2.42M (9.2\,MB). On an otherwise idle laptop, one 28-node graph takes a median of 5.4\,ms (p95 8.0\,ms) for the predictor and 5.9\,ms for predictor plus trajectory head on an RTX~3050 Laptop GPU, and 4.1\,ms and 5.9\,ms on the 12-thread 12th-generation Intel CPU. A batch of 64 graphs takes 8.3\,ms on the GPU and 45\,ms on the CPU. Single-graph latency is dominated by kernel-launch and framework overhead rather than arithmetic, so the CPU is competitive. A remapping decision every hour of operation is far within this budget.
 
 % ============================================================
 \section{Limitations and Threats to Validity}
@@ -288,27 +348,35 @@ The predictor has 1.89M parameters (7.2\,MB in FP32) and the predictor with traj
 
 \textbf{Synthetic, uncalibrated data.} All labels come from our analytical simulator and textbook aging models with uncalibrated coefficients. There is no silicon or external validation. The prediction results show that the model fits the simulator.
 
-\textbf{Small dataset and single seed.} 1{,}500 snapshots (150 test graphs) and one seed for every stage. We report no confidence intervals; differences between workloads in particular are small-sample estimates.
+\textbf{Single training seed.} Every model was trained once (seed 42) on 1{,}500 snapshots. The bootstrap intervals cover test-set sampling, not training variance, and the optimizer seeds cover search variance only.
+
+\textbf{Saturated mapping objective.} Router traffic in the simulator does not depend on the mapping, and without variation all MAC clusters are identical. Peak aging is therefore minimized by any spread mapping. The variation study uses the physics model only; a learned surrogate trained with variation is untested.
 
 \textbf{Simplified labels.} TDDB is effectively zero under our parameters, so labels are driven by NBTI and HCI. Trajectory labels are a smooth extrapolation of the current state rather than simulated future workload behaviour.
 
-\textbf{Model inputs.} Edge weights and latencies are not used by the graph layers, and feature 3 duplicates feature 0. Neither affects the validity of the reported numbers, but both are simplifications relative to the intended design.
+\textbf{Model inputs.} Edge weights and latencies are not used by the graph layers, and feature 3 duplicates feature 0.
 
 \textbf{Reduced workloads.} Workloads are 12--15-layer abstractions of the named networks, without attention score and softmax operations.
 
-\textbf{NSGA-II.} The population is small (20) and the hypervolume used for stopping is an approximation over the whole population. Reductions are measured on predicted, not simulated, aging and against a pessimistic single-cluster baseline.
+\textbf{PPO.} The controller was trained for only 960 steps in an environment where a fixed policy is already optimal, and it acts on physics-model aging with a heuristic forecast rather than on the learned predictor and trajectory head.
 
-\textbf{PPO.} The controller acts on physics-model aging with a heuristic forecast rather than on the learned predictor and trajectory head, it was trained for only 960 steps, and it does not beat a fixed rotation policy.
-
-\textbf{No ablation.} We did not measure the contribution of individual architectural blocks or forecast horizons.
+\textbf{No ablation.} We did not measure the contribution of individual architectural blocks or the effect of training-set size.
 
 % ============================================================
 \section{Conclusion}
 \label{sec:conclusion}
 
-In simulation, a Hybrid GNN--Transformer fits component-level aging labels on an accelerator graph closely ($R^2 = 0.996$) and forecasts a 10-step trajectory with a third of a persistence forecast's error. As a surrogate inside NSGA-II it finds mappings that lower predicted peak aging by 8.6--19.3\% relative to single-cluster placement. A short PPO run did not produce a controller better than fixed rotation. The most important next steps are calibrating the aging models against silicon data, running multiple seeds with confidence intervals, measuring architecture and horizon ablations, and connecting the learned predictor to the runtime controller with a substantially longer training budget.
+In simulation, a Hybrid GNN--Transformer fits component-level aging labels on an accelerator graph closely ($R^2 = 0.996$), forecasts a 10-step trajectory with a third of a persistence forecast's error, and runs in about 5\,ms per graph. Used as an optimization surrogate, it does not produce better mappings than round-robin. In this simulator, peak aging after load spreading is set by NoC routers that the mapping cannot relieve, and the surrogate's errors are as large as the differences it would need to resolve. A greedy oracle shows that the runtime environment likewise leaves nothing for a learned controller to gain. Per-node process variation is what makes aging-aware mapping worthwhile: with it, physics-guided search beats round-robin by 8--15\% on average. The next steps follow directly:
+\begin{itemize}
+    \item train the surrogate on variation-aware data with the per-unit variation as an input;
+    \item make NoC traffic mapping-dependent;
+    \item judge surrogates by decision quality, not node-level $R^2$;
+    \item run ablations and multiple training seeds;
+    \item retrain PPO in the variation setting with a realistic budget.
+\end{itemize}
 
 Code, checkpoints and figure scripts: \url{https://github.com/grizzleyyybear/adaptive-aging-aware-DNN}.
+
 
 % ============================================================
 \begin{thebibliography}{13}

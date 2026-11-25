@@ -194,7 +194,10 @@ def main() -> int:
     # per-step *means*; re-run the (non-learned) baselines as episode sums.
     from planning.lifetime_planner import LifetimePlanner
     from rl.environment import AgingControlEnv
-    env = AgingControlEnv(cfg, sim, LifetimePlanner(graph, cfg.planning))
+    # The released PPO policy was trained in run_eval.py's 16x16-PE environment (the dataset and
+    # predictor use 4x4; see run_eval.PE_ARRAY), so fixed policies are compared in that environment.
+    cfg16 = OmegaConf.merge(cfg, {"accelerator": {"pe_array": [16, 16], "pe_array_rows": 16, "pe_array_cols": 16}})
+    env = AgingControlEnv(cfg16, TimeloopRunner(cfg16.accelerator), LifetimePlanner(graph, cfg.planning))
     rng = np.random.default_rng(123)
     policies = {
         "Random": lambda e: int(rng.integers(0, e.action_space.n)),

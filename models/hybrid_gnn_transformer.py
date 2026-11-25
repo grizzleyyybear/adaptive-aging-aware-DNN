@@ -42,7 +42,8 @@ class HybridGNNTransformer(nn.Module):
         self.hidden_dim = hidden_dim
         self.seq_len = seq_len
         self.dropout = dropout
-        self.components = set(components or ("gcn", "gat", "transformer"))
+        # None = full model; an empty iterable = input projection + MLP head only (ablation).
+        self.components = set(("gcn", "gat", "transformer") if components is None else components)
 
         self.input_proj = nn.Linear(node_feature_dim, hidden_dim)
 

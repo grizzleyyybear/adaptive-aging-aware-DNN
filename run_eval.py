@@ -29,6 +29,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
+# The summary prints ✓/✗/²; on Windows a redirected stdout is cp1252 and would crash before results are saved.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 import numpy as np
 import torch
@@ -132,6 +136,19 @@ ACTIVITY_TRACE_FILES = _arg_list("--activity-traces")
 AGING_TECHNOLOGY = _arg_value("--aging-technology", "custom", str)
 AGING_VARIATION_SIGMA = _arg_value("--aging-variation", 0.0, float)
 AGING_RECOVERY_COEFF = _arg_value("--aging-recovery", 0.0, float)
+# Training-plan hooks (defaults reproduce the released run).
+SEED = _arg_value("--seed", 42, int)            # model init / training / PPO seed
+DATA_SEED = _arg_value("--data-seed", 42, int)  # synthetic dataset draw
+COMPONENTS = _arg_list("--components") or None  # ablation, e.g. "gcn,gat" or "none" (MLP only); default all three
+if COMPONENTS == ["none"]:
+    COMPONENTS = []
+PPO_USE_PREDICTOR = "--ppo-use-predictor" in sys.argv  # env uses learned predictor + trajectory head
+PPO_HIDDEN = _arg_value("--ppo-hidden", 128, int)
+PREDICT_ONLY = "--predict-only" in sys.argv  # stop after predictor + trajectory (seed / ablation runs)
+# PE array of the simulated accelerator. The released dataset was generated with 4x4: AgingDataset's
+# defaults (pe_array_rows/cols = 4) overrode the 16x16 pe_array, while NSGA-II and PPO used 16x16.
+# Now explicit and shared by data generation and runtime; 4,4 reproduces the released checkpoints.
+PE_ARRAY = [int(v) for v in _arg_value("--pe-array", "4,4", str).split(",")]
 
 TRAIN_EPOCHS = PRED_EPOCHS  # kept for backward compat display
 
@@ -160,6 +177,8 @@ def _save_results(mode_label, dataset_size, predictor_metrics, trajectory_metric
         "trajectory": trajectory_metrics,
         "nsga2": nsga2_metrics,
         "ppo": ppo_metrics,
+        "run": {"seed": SEED, "data_seed": DATA_SEED, "components": ["gcn", "gat", "transformer"] if COMPONENTS is None else COMPONENTS,
+                "ppo_use_predictor": PPO_USE_PREDICTOR, "ppo_hidden": PPO_HIDDEN, "pe_array": PE_ARRAY},
     }
     if completed_stages is not None:
         payload["completed_stages"] = sorted(completed_stages)
@@ -215,7 +234,7 @@ def build_config(epochs=None, patience=None):
             "num_mac_clusters": 16, "mac_clusters": 16,
             "num_sram_banks": 8, "sram_banks": 8,
             "num_noc_routers": 4, "noc_routers": 4,
-            "pe_array": [16, 16], "num_layers": 15,
+            "pe_array": PE_ARRAY, "pe_array_rows": PE_ARRAY[0], "pe_array_cols": PE_ARRAY[1], "num_layers": 15,
             "max_macs_per_cluster": 256, "clock_ghz": 1.0,
             "sram_read_energy_pj": 2.0, "noc_hop_energy_pj": 0.5,
             "mac_energy_pj_per_op": 0.1, "ops_per_cycle": 2,
@@ -307,8 +326,10 @@ def main():
     pred_cfg = build_config(epochs=PRED_EPOCHS, patience=PRED_PATIENCE)
     traj_cfg = build_config(epochs=TRAJ_EPOCHS, patience=TRAJ_PATIENCE)
     cfg = pred_cfg  # shared config for non-training parts
-    torch.manual_seed(42)
-    np.random.seed(42)
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+    print(f"  seed={SEED}  data_seed={DATA_SEED}  components={'all' if COMPONENTS is None else (COMPONENTS or 'none')}  "
+          f"ppo_use_predictor={PPO_USE_PREDICTOR}  ppo_hidden={PPO_HIDDEN}", flush=True)
     accel_cfg = cfg.accelerator
 
     from graph.accelerator_graph import AcceleratorGraph
@@ -353,6 +374,7 @@ def main():
     if RESUME_MODE and completed_stages:
         print(f"  [resume] completed stages so far: {sorted(completed_stages)}", flush=True)
 
+    predictor = traj_pred = None
     if PPO_ONLY:
         print("\n[2-5/6] Skipping dataset, predictor, trajectory, and NSGA-II.", flush=True)
         if existing_results:
@@ -379,7 +401,7 @@ def main():
         t0 = time.perf_counter()
         dataset = AgingDataset(
             root=str(REPO_ROOT / "data"),
-            split="train", size=DATASET_SIZE, cfg=cfg, seed=42,
+            split="train", size=DATASET_SIZE, cfg=cfg, seed=DATA_SEED,
         )
         n_samples = len(dataset)
         print(f"  {n_samples} samples loaded ({time.perf_counter()-t0:.1f}s)", flush=True)
@@ -399,6 +421,7 @@ def main():
             transformer_layers=cfg.model.transformer_layers,
             transformer_heads=cfg.model.transformer_heads,
             seq_len=horizon,
+            components=COMPONENTS,
         )
         pred_best_ckpt = CKPT_DIR / "predictor_best.pt"
         if _stage_done("predictor") and pred_best_ckpt.exists():
@@ -451,6 +474,10 @@ def main():
                 completed_stages=completed_stages,
             )
             print(f"  Intermediate results saved after step 4 to {RESULTS_PATH}", flush=True)
+
+        if PREDICT_ONLY:
+            print("\n  --predict-only: stopping after the trajectory stage.", flush=True)
+            return
 
     if not PPO_ONLY and _stage_done("nsga2") and nsga_results:
         print(f"\n[5/6] NSGA-II already complete — reusing {len(nsga_results)} workload result(s)", flush=True)
@@ -521,9 +548,21 @@ def main():
 
     # ── 6. PPO ────────────────────────────────────────────────────────
     print(f"\n[6/6] PPO training ({PPO_ITERS} iterations, {PPO_STEPS} steps/iter)...", flush=True)
-    env = AgingControlEnv(cfg, sim, planner)
+    if PPO_USE_PREDICTOR:
+        if predictor is None:
+            predictor, _, _ = load_pretrained_predictor(cfg, checkpoint_candidates=[CKPT_DIR / "predictor_best.pt"], device_request=DEVICE)
+        if traj_pred is None and (CKPT_DIR / "trajectory_best.pt").exists():
+            traj_pred = TrajectoryPredictor(gnn_encoder=copy.deepcopy(predictor), hidden_dim=cfg.model.hidden_dim,
+                                            horizon=cfg.model.prediction_horizon, gamma=0.95)
+            traj_pred.load_state_dict(torch.load(CKPT_DIR / "trajectory_best.pt", map_location="cpu"))
+            traj_pred.to(next(predictor.parameters()).device).eval()
+        from aging_models.aging_label_generator import AgingLabelGenerator
+        env = AgingControlEnv(sim, planner, WorkloadRunner(cfg.workloads), AgingLabelGenerator(cfg=cfg),
+                              graph, predictor, traj_pred, fb, cfg)
+    else:
+        env = AgingControlEnv(cfg, sim, planner)
     obs_dim = env.observation_space.shape[0]
-    policy  = ActorCritic(obs_dim=obs_dim, action_dim=5, hidden_dim=128)
+    policy  = ActorCritic(obs_dim=obs_dim, action_dim=5, hidden_dim=PPO_HIDDEN)
     ppo_cfg = OmegaConf.create({
         "n_iterations": PPO_ITERS, "n_steps": PPO_STEPS,
         "batch_size": PPO_BATCH_SIZE, "n_epochs": 4,
@@ -582,7 +621,7 @@ def main():
 
     print("\n  NSGA-II (Improved)")
     total_sols = sum(r["count"] for r in nsga_results.values())
-    best_red   = max(r["reduction"] for r in nsga_results.values())
+    best_red   = max((r["reduction"] for r in nsga_results.values()), default=0.0)
     total_hits = sum(r["cache_hits"] for r in nsga_results.values())
     print(f"  Total Pareto solutions:  {total_sols}  (prev: 4-10 per workload)")
     print(f"  Best aging reduction:    {best_red:.1f}%  (prev: 63%)")

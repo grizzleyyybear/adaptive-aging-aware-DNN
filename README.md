@@ -54,14 +54,43 @@ All numbers below are on simulated data, from a single seed (42), and are regene
 | Aging predictor, test R2 / MAE | 0.9962 / 0.0052 (mean-predictor MAE 0.107) | `eval_results.json`, re-verified by `scripts/verify_results.py` |
 | Aging predictor, Spearman | 0.981 | same |
 | Trajectory head, test R2 / MAE | 0.9453 / 0.0355 (persistence MAE 0.104) | same |
-| NSGA-II predicted peak-aging reduction vs. all-on-cluster-0 | 8.6-19.3% (mean 12.6%), 5 workloads | `paper/tables/measured.json` |
-| PPO mean training reward per 10-step episode | 1.032 (round-robin policy: 1.574, random: 1.021) | `eval_results.json`, `measured.json` |
+| Predictor 95% bootstrap CI (R2) / latency | [0.9956, 0.9966] / 5.4 ms per graph (RTX 3050), 4.1 ms (CPU) | `paper/tables/extended.json` |
+| NSGA-II peak-aging reduction vs. all-on-cluster-0, as predicted by the surrogate | 15.2-27.8% (seed 42) | `paper/tables/measured.json` |
+| Same mappings scored by the physics model | 21.6-21.7%, identical to round-robin, random search and physics-objective NSGA-II | `paper/tables/extended.json` |
+| NSGA-II (physics) vs round-robin with per-node process variation | +8.1 ± 5.9% (σ = 0.1), +15.3 ± 11.0% (σ = 0.2) | `paper/tables/variation_scoping.json` |
+| PPO mean training reward per 10-step episode | 1.032 (always-rotate 1.574, greedy one-step oracle 1.572, random 1.021) | `eval_results.json`, `extended.json` |
 
-Test set: 150 graphs (1,500 samples split 80/10/10). PPO trained for 960 steps does **not** beat a fixed round-robin policy; the paper reports this as a negative result.
+Test set: 150 graphs (1,500 samples split 80/10/10).
 
-Notes on `eval_results.json`: its `nsga2` block comes from a run where the trajectory head fine-tuned the shared predictor encoder and where the reduction compared the penalised objective `f1` against an unpenalised peak, and its `ppo.baselines` are per-step means while `ppo.rewards` are per-episode sums. Both are fixed in `run_eval.py`; the corrected numbers are in `paper/tables/measured.json`.
+Main findings:
 
-Figures: `generate_figures.py` writes `figures/` and `paper/assets/0*.png`; `scripts/measure_paper_figures.py` writes `paper/assets/fig_*`. No figure contains synthetic or hand-entered results.
+- The predictor is accurate per node, but as an optimization surrogate it is no better than
+  round-robin. Once load is spread, peak aging sits on a NoC router that the mapping cannot
+  change.
+- Aging-aware mapping only pays off with per-unit process variation.
+- PPO does not beat always-rotate, and the greedy oracle shows the runtime environment leaves no
+  headroom.
+- `TRAINING_PLAN.md` lists the training runs that address each open point.
+
+Notes on `eval_results.json`: its `nsga2` block is not comparable to the tables above, for
+three reasons, all fixed in `run_eval.py`:
+
+- That run's trajectory head fine-tuned the shared predictor encoder.
+- Its reduction compared the penalised objective `f1` against an unpenalised peak.
+- Its NSGA-II simulated a 16×16 PE array, while the dataset was generated on 4×4. The dataset
+  defaults overrode the configured array, so `--pe-array` (default `4,4`) is now one shared
+  setting.
+
+Its `ppo.baselines` are per-step means while `ppo.rewards` are per-episode sums. The released
+dataset regenerates bit-exactly from code.
+
+Figures:
+
+- `generate_figures.py` writes `figures/` and `paper/assets/0*.png`.
+- `scripts/measure_paper_figures.py` and `scripts/extended_analysis.py` write
+  `paper/assets/fig_*`.
+
+No figure contains synthetic or hand-entered results.
 
 ## Reproduce
 
@@ -85,6 +114,12 @@ python scripts/verify_results.py
 
 # Measured supplemental figures, NSGA-II and baseline numbers (no training; ~20 min).
 python scripts/measure_paper_figures.py
+
+# Bootstrap CIs, latency, mapping study vs. physics model, runtime oracle (no training; ~35 min, idle machine).
+python scripts/extended_analysis.py
+
+# Physics-only: when does aging-aware mapping beat round-robin? (no training; ~5 min)
+python scripts/variation_scoping.py
 
 # Generate figures and paper tables from eval_results.json + measured.json.
 python generate_figures.py

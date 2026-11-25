@@ -130,7 +130,26 @@ class AgingDataset(InMemoryDataset):
         source = self._safe_cache_token(self.dataset_source)
         version = self._safe_cache_token(self.dataset_version)
         tech = self._safe_cache_token(str(self.cfg.aging.get("technology_node", "custom")))
-        return [f"aging_{source}_{version}_{tech}_{self.split}_{self.size}_mac{n_mac}_feat{self.FEATURE_DIM}.pt"]
+        # Settings that change the samples but were not in the original name; appended only
+        # when non-default so the released cache file name is unchanged.
+        extra = ""
+        # Effective PE array, resolved the way TimeloopRunner does (explicit rows/cols win over pe_array).
+        pe = list(self._acc_cfg.get("pe_array", [16, 16]) or [16, 16])
+        rows = int(self._acc_cfg.get("pe_array_rows", pe[0]))
+        cols = int(self._acc_cfg.get("pe_array_cols", pe[1]))
+        if (rows, cols) != (4, 4):  # 4x4 is what the released cache was generated with
+            extra += f"_pe{rows}x{cols}"
+        if self.horizon != self.HORIZON:
+            extra += f"_h{self.horizon}"
+        sigma = float(self.cfg.aging.get("variation_sigma", 0.0) or 0.0)
+        if self.cfg.aging.get("stochastic_variation", False) and sigma > 0:
+            extra += f"_var{sigma:g}"
+        recovery = self.cfg.aging.get("recovery", {}) or {}
+        if recovery.get("enabled", False) and float(recovery.get("coefficient", 0.0)) > 0:
+            extra += f"_rec{float(recovery.get('coefficient')):g}"
+        if self.seed != 42:
+            extra += f"_s{self.seed}"
+        return [f"aging_{source}_{version}_{tech}_{self.split}_{self.size}_mac{n_mac}_feat{self.FEATURE_DIM}{extra}.pt"]
 
     def download(self) -> None:
         return None

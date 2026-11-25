@@ -156,6 +156,7 @@ class MappingProblem(Problem):
         device,
         cache: _EvalCache | None = None,
         balance_weight: float = 0.0,
+        aging_generator: Any = None,
     ):
         super().__init__(
             n_var=max(len(layers), 1),
@@ -176,6 +177,7 @@ class MappingProblem(Problem):
         self.device = device
         self._cache = cache or _EvalCache()
         self._balance_weight = float(balance_weight)
+        self.aging_generator = aging_generator
 
     def _evaluate(self, X, out, *args, **kwargs):
         X = np.atleast_2d(np.asarray(X))
@@ -200,6 +202,7 @@ class MappingProblem(Problem):
                     workload_name=self.workload_name,
                     stress_time_s=self.stress_time_s,
                     predictor=self.aging_predictor,
+                    aging_generator=self.aging_generator,
                     device=self.device,
                 )
                 peak = metrics["peak_aging"]
@@ -237,8 +240,11 @@ class NSGA2Optimizer:
         simulator: TimeloopRunner,
         aging_predictor: Any,
         config: DictConfig,
+        aging_generator: Any = None,
     ):
+        """aging_generator: used as the aging objective when aging_predictor is None (physics-model search)."""
         self.accel_cfg = accelerator_config
+        self.aging_generator = aging_generator
         self.sim = simulator
         self.predictor = aging_predictor
         self.config = config
@@ -322,6 +328,7 @@ class NSGA2Optimizer:
             device=self.device,
             cache=self._cache,
             balance_weight=self.balance_weight,
+            aging_generator=self.aging_generator,
         )
 
         convergence_cb = ConvergenceCallback(

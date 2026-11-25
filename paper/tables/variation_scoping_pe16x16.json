@@ -1,0 +1,349 @@
+{
+  "pe_array": "16,16",
+  "stress_time_s": 360000.0,
+  "nsga": {
+    "pop": 20,
+    "gens": 20,
+    "seed": 42
+  },
+  "results": [
+    {
+      "sigma": 0.0,
+      "chip": 42,
+      "workload": "ResNet-50",
+      "static": 0.4550328205649232,
+      "round_robin": 0.3570072919884776,
+      "nsga_physics": 0.35675241845040645,
+      "nsga_vs_rr_pct": 0.07139168969113327
+    },
+    {
+      "sigma": 0.0,
+      "chip": 42,
+      "workload": "BERT-Base",
+      "static": 0.4550328205649232,
+      "round_robin": 0.3566730463112664,
+      "nsga_physics": 0.35672043987239027,
+      "nsga_vs_rr_pct": -0.013287676659064449
+    },
+    {
+      "sigma": 0.0,
+      "chip": 42,
+      "workload": "MobileNetV2",
+      "static": 0.4323707527835965,
+      "round_robin": 0.35739224706953815,
+      "nsga_physics": 0.3565429601122114,
+      "nsga_vs_rr_pct": 0.23763440989291407
+    },
+    {
+      "sigma": 0.0,
+      "chip": 42,
+      "workload": "EfficientNet-B4",
+      "static": 0.44942800749561646,
+      "round_robin": 0.35703159447304694,
+      "nsga_physics": 0.3566084576119519,
+      "nsga_vs_rr_pct": 0.1185152428091242
+    },
+    {
+      "sigma": 0.0,
+      "chip": 42,
+      "workload": "ViT-B/16",
+      "static": 0.4550328205649232,
+      "round_robin": 0.35682451712397145,
+      "nsga_physics": 0.3567255386631286,
+      "nsga_vs_rr_pct": 0.027738693977815327
+    },
+    {
+      "sigma": 0.1,
+      "chip": 42,
+      "workload": "ResNet-50",
+      "static": 0.42164992765792814,
+      "round_robin": 0.414955643611687,
+      "nsga_physics": 0.3576504739350563,
+      "nsga_vs_rr_pct": 13.809950667945744
+    },
+    {
+      "sigma": 0.1,
+      "chip": 42,
+      "workload": "BERT-Base",
+      "static": 0.42164992765792814,
+      "round_robin": 0.41456684179785547,
+      "nsga_physics": 0.3576288857295554,
+      "nsga_vs_rr_pct": 13.734324680038746
+    },
+    {
+      "sigma": 0.1,
+      "chip": 42,
+      "workload": "MobileNetV2",
+      "static": 0.40163087691926597,
+      "round_robin": 0.4154034319207758,
+      "nsga_physics": 0.3578693497422817,
+      "nsga_vs_rr_pct": 13.850170161681955
+    },
+    {
+      "sigma": 0.1,
+      "chip": 42,
+      "workload": "EfficientNet-B4",
+      "static": 0.41670218971370093,
+      "round_robin": 0.41498391278661856,
+      "nsga_physics": 0.35790496525376486,
+      "nsga_vs_rr_pct": 13.754496445312384
+    },
+    {
+      "sigma": 0.1,
+      "chip": 42,
+      "workload": "ViT-B/16",
+      "static": 0.42164992765792814,
+      "round_robin": 0.4134221070709893,
+      "nsga_physics": 0.3578360413712913,
+      "nsga_vs_rr_pct": 13.445353973330995
+    },
+    {
+      "sigma": 0.1,
+      "chip": 43,
+      "workload": "ResNet-50",
+      "static": 0.42944434187121727,
+      "round_robin": 0.34760527232030747,
+      "nsga_physics": 0.3475190861407179,
+      "nsga_vs_rr_pct": 0.024794267076057367
+    },
+    {
+      "sigma": 0.1,
+      "chip": 43,
+      "workload": "BERT-Base",
+      "static": 0.42944434187121727,
+      "round_robin": 0.3492669003894281,
+      "nsga_physics": 0.3473352867573177,
+      "nsga_vs_rr_pct": 0.5530480071133835
+    },
+    {
+      "sigma": 0.1,
+      "chip": 43,
+      "workload": "MobileNetV2",
+      "static": 0.4089774905404526,
+      "round_robin": 0.34794941066069074,
+      "nsga_physics": 0.3473560179666775,
+      "nsga_vs_rr_pct": 0.17053993363188058
+    },
+    {
+      "sigma": 0.1,
+      "chip": 43,
+      "workload": "EfficientNet-B4",
+      "static": 0.42438564537148143,
+      "round_robin": 0.34762699947541814,
+      "nsga_physics": 0.3473538341550112,
+      "nsga_vs_rr_pct": 0.07858000696699603
+    },
+    {
+      "sigma": 0.1,
+      "chip": 43,
+      "workload": "ViT-B/16",
+      "static": 0.42944434187121727,
+      "round_robin": 0.3494203314637627,
+      "nsga_physics": 0.34751517242562024,
+      "nsga_vs_rr_pct": 0.5452341683042725
+    },
+    {
+      "sigma": 0.1,
+      "chip": 44,
+      "workload": "ResNet-50",
+      "static": 0.4333133213843072,
+      "round_robin": 0.38887015422895566,
+      "nsga_physics": 0.34356084785343305,
+      "nsga_vs_rr_pct": 11.651525806952462
+    },
+    {
+      "sigma": 0.1,
+      "chip": 44,
+      "workload": "BERT-Base",
+      "static": 0.4333133213843072,
+      "round_robin": 0.3931011353592044,
+      "nsga_physics": 0.3431030610962431,
+      "nsga_vs_rr_pct": 12.718883199682057
+    },
+    {
+      "sigma": 0.1,
+      "chip": 44,
+      "workload": "MobileNetV2",
+      "static": 0.41101345807195044,
+      "round_robin": 0.37544458857539104,
+      "nsga_physics": 0.34352124945705353,
+      "nsga_vs_rr_pct": 8.502809759349386
+    },
+    {
+      "sigma": 0.1,
+      "chip": 44,
+      "workload": "EfficientNet-B4",
+      "static": 0.42779558325159495,
+      "round_robin": 0.3676631538382619,
+      "nsga_physics": 0.34339740408089575,
+      "nsga_vs_rr_pct": 6.599994996518166
+    },
+    {
+      "sigma": 0.1,
+      "chip": 44,
+      "workload": "ViT-B/16",
+      "static": 0.4333133213843072,
+      "round_robin": 0.39327121942640814,
+      "nsga_physics": 0.3433382054923201,
+      "nsga_vs_rr_pct": 12.696839094128498
+    },
+    {
+      "sigma": 0.2,
+      "chip": 42,
+      "workload": "ResNet-50",
+      "static": 0.39296275537532066,
+      "round_robin": 0.48231375689236966,
+      "nsga_physics": 0.3612154405114269,
+      "nsga_vs_rr_pct": 25.107788167022232
+    },
+    {
+      "sigma": 0.2,
+      "chip": 42,
+      "workload": "BERT-Base",
+      "static": 0.39296275537532066,
+      "round_robin": 0.4818614866345706,
+      "nsga_physics": 0.36097782688027025,
+      "nsga_vs_rr_pct": 25.08680670841306
+    },
+    {
+      "sigma": 0.2,
+      "chip": 42,
+      "workload": "MobileNetV2",
+      "static": 0.37519842914074464,
+      "round_robin": 0.4828346429435508,
+      "nsga_physics": 0.36128207501166437,
+      "nsga_vs_rr_pct": 25.17478182403274
+    },
+    {
+      "sigma": 0.2,
+      "chip": 42,
+      "workload": "EfficientNet-B4",
+      "static": 0.38857552443946375,
+      "round_robin": 0.4823466407580813,
+      "nsga_physics": 0.36130179837040516,
+      "nsga_vs_rr_pct": 25.094990233048108
+    },
+    {
+      "sigma": 0.2,
+      "chip": 42,
+      "workload": "ViT-B/16",
+      "static": 0.39296275537532066,
+      "round_robin": 0.4805298855618022,
+      "nsga_physics": 0.36099603804425134,
+      "nsga_vs_rr_pct": 24.87542421587373
+    },
+    {
+      "sigma": 0.2,
+      "chip": 43,
+      "workload": "ResNet-50",
+      "static": 0.40727672473401105,
+      "round_robin": 0.3433816343494752,
+      "nsga_physics": 0.3434201037731619,
+      "nsga_vs_rr_pct": -0.01120311042830269
+    },
+    {
+      "sigma": 0.2,
+      "chip": 43,
+      "workload": "BERT-Base",
+      "static": 0.40727672473401105,
+      "round_robin": 0.3431104718220609,
+      "nsga_physics": 0.34297624133916976,
+      "nsga_vs_rr_pct": 0.0391216514547949
+    },
+    {
+      "sigma": 0.2,
+      "chip": 43,
+      "workload": "MobileNetV2",
+      "static": 0.38872183099755914,
+      "round_robin": 0.34369388774870185,
+      "nsga_physics": 0.34288815689061364,
+      "nsga_vs_rr_pct": 0.23443269921557092
+    },
+    {
+      "sigma": 0.2,
+      "chip": 43,
+      "workload": "EfficientNet-B4",
+      "static": 0.4026936980092226,
+      "round_robin": 0.34340134988641374,
+      "nsga_physics": 0.3429401868521583,
+      "nsga_vs_rr_pct": 0.13429272610837337
+    },
+    {
+      "sigma": 0.2,
+      "chip": 43,
+      "workload": "ViT-B/16",
+      "static": 0.40727672473401105,
+      "round_robin": 0.34305009006250997,
+      "nsga_physics": 0.34320151557080303,
+      "nsga_vs_rr_pct": -0.04414093238263387
+    },
+    {
+      "sigma": 0.2,
+      "chip": 44,
+      "workload": "ResNet-50",
+      "static": 0.41383943034778925,
+      "round_robin": 0.4288327558099027,
+      "nsga_physics": 0.3351780915654433,
+      "nsga_vs_rr_pct": 21.839438096929232
+    },
+    {
+      "sigma": 0.2,
+      "chip": 44,
+      "workload": "BERT-Base",
+      "static": 0.41383943034778925,
+      "round_robin": 0.43358636251212,
+      "nsga_physics": 0.33494888386881183,
+      "nsga_vs_rr_pct": 22.74921150006211
+    },
+    {
+      "sigma": 0.2,
+      "chip": 44,
+      "workload": "MobileNetV2",
+      "static": 0.3918528846985661,
+      "round_robin": 0.41375417536581743,
+      "nsga_physics": 0.3355308743300053,
+      "nsga_vs_rr_pct": 18.9057429974336
+    },
+    {
+      "sigma": 0.2,
+      "chip": 44,
+      "workload": "EfficientNet-B4",
+      "static": 0.4083968946792234,
+      "round_robin": 0.40501856413823795,
+      "nsga_physics": 0.3353062118977601,
+      "nsga_vs_rr_pct": 17.212137519870357
+    },
+    {
+      "sigma": 0.2,
+      "chip": 44,
+      "workload": "ViT-B/16",
+      "static": 0.41383943034778925,
+      "round_robin": 0.4337774725166609,
+      "nsga_physics": 0.33512207877762684,
+      "nsga_vs_rr_pct": 22.743318865007403
+    }
+  ],
+  "summary_nsga_vs_rr_pct": {
+    "0.0": {
+      "mean": 0.08839847194238447,
+      "std": 0.08658787118997933,
+      "min": -0.013287676659064449,
+      "max": 0.23763440989291407,
+      "n": 5
+    },
+    "0.1": {
+      "mean": 8.142436344535533,
+      "std": 5.898490128788411,
+      "min": 0.024794267076057367,
+      "max": 13.850170161681955,
+      "n": 15
+    },
+    "0.2": {
+      "mean": 15.276142877444025,
+      "std": 10.97622676848362,
+      "min": -0.04414093238263387,
+      "max": 25.17478182403274,
+      "n": 15
+    }
+  }
+}

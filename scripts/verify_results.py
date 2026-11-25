@@ -23,12 +23,15 @@ def main() -> int:
     ap.add_argument("--ckpt-dir", default=str(REPO_ROOT / "checkpoints"))
     ap.add_argument("--data-root", default=str(REPO_ROOT / "data"))
     ap.add_argument("--tol", type=float, default=2e-3, help="max abs diff per metric")
+    ap.add_argument("--pe-array", default="4,4", help="must match run_eval --pe-array of the run")
+    ap.add_argument("--aging-variation", default="0.0", help="must match run_eval --aging-variation of the run")
     args = ap.parse_args()
 
     reported = json.loads(Path(args.results).read_text(encoding="utf-8"))
     size = int(reported["dataset_size"])
     # run_eval reads its settings from argv at import time.
-    sys.argv = [sys.argv[0], "--quality", "--dataset-size", str(size)]
+    sys.argv = [sys.argv[0], "--quality", "--dataset-size", str(size), "--pe-array", args.pe_array,
+                "--aging-variation", args.aging_variation]
     import torch
     import run_eval
     from graph.graph_dataset import AgingDataset
